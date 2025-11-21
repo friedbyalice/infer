@@ -29,7 +29,8 @@ RUN apt-get update && \
       python3-distutils \
       unzip \
       xz-utils \
-      zlib1g-dev && \
+      zlib1g-dev \
+      rsync && \
     rm -rf /var/lib/apt/lists/*
 
 # Disable sandboxing
