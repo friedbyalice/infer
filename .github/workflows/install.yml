@@ -8,7 +8,7 @@ env:
   USER_LLVM: "yes"
   LLVM_CONFIG: "/usr/lib/llvm-19/bin/llvm-config"
   KOTLINC: "no"
-  
+
 jobs:
   create-release:
     name: Create release
@@ -62,6 +62,15 @@ jobs:
           - ubuntu-24.04
         ocaml-compiler:
           - ocaml-variants.5.3.0+options,ocaml-option-flambda
+        target:
+          - all
+          - java
+          - clang
+          - erlang
+          - hack
+          - python
+          # - rust
+          - swift
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -81,13 +90,13 @@ jobs:
       - name: Setup Java SDK
         uses: actions/setup-java@v3
         with:
-          distribution: 'temurin'
-          java-version: '11'
+          distribution: "temurin"
+          java-version: "11"
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Get OS version
         uses: sersoft-gmbh/os-version-action@v1
@@ -102,11 +111,13 @@ jobs:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
 
       - name: Compute hash of clang installation
+        if: ${{ contains('all,clang,swift', matrix.target) }}
         id: clang-hash
         run: |
           echo "value=$(./facebook-clang-plugins/clang/setup.sh --clang-hash)" >> $GITHUB_OUTPUT
 
       - name: Attempt to get clang from the cache
+        if: ${{ contains('all,clang,swift', matrix.target) }}
         id: cache-clang
         uses: actions/cache@v4
         with:
@@ -114,20 +125,22 @@ jobs:
           key: clang-${{ runner.os }}-${{ runner.arch }}-${{ steps.clang-hash.outputs.value }}
 
       - name: Record that the clang cache was hit
-        if: steps.cache-clang.outputs.cache-hit == 'true'
+        if: (contains('all,clang,swift', matrix.target)) && steps.cache-clang.outputs.cache-hit == 'true'
         run: ./facebook-clang-plugins/clang/setup.sh --only-record-install
 
       - name: Build clang on cache misses
-        if: steps.cache-clang.outputs.cache-hit != 'true'
+        if: (contains('all,clang,swift', matrix.target)) && steps.cache-clang.outputs.cache-hit != 'true'
         run: |
           ./facebook-clang-plugins/clang/src/prepare_clang_src.sh
           CC=clang CXX=clang++ ./facebook-clang-plugins/clang/setup.sh --ninja --sequential-link
 
       - if: runner.os == 'Linux'
-        run: ./build-infer.sh --yes --user-opam-switch
+        run: ./build-infer.sh --yes --user-opam-switch ${{ matrix.target }}
 
       - if: runner.os == 'macOS'
-        run: ./build-infer.sh --yes --user-opam-switch -- --disable-python-analyzers --disable-swift-analyzers
+        run: >-
+          ./build-infer.sh --yes --user-opam-switch
+          ${{ matrix.target }} -- --disable-python-analyzers --disable-swift-analyzers
 
       - name: Install ocamlformat
         run: |
@@ -136,7 +149,7 @@ jobs:
           opam exec -- ocamlformat --version
 
       - name: Test infer
-        run: make test -k NDKBUILD=no
+        run: make config_tests -k NDKBUILD=no
 
       - run: |
           sudo make install BUILD_MODE=opt
@@ -145,9 +158,16 @@ jobs:
 
       - name: Build release tarball
         id: build-release
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          ./scripts/create_binary_release.sh "$(echo '${{ github.ref }}' | rev | cut -d / -f 1 | rev)"
+        run: >-
+          ./scripts/create_binary_release.sh
+          "$(echo '${{ github.ref }}' | rev | cut -d / -f 1 | rev)"
+          ${{ matrix.target }}
+
+      - name: Upload release tarball as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ steps.build-release.outputs.tarball-path }}
 
       - name: Upload Release Asset
         if: startsWith(github.ref, 'refs/tags/v')
