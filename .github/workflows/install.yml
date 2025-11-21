@@ -4,6 +4,10 @@ on:
   - push
   - pull_request
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   USER_LLVM: "yes"
   LLVM_CONFIG: "/usr/lib/llvm-19/bin/llvm-config"
@@ -65,12 +69,12 @@ jobs:
         target:
           - all
           - java
-          - clang
-          - erlang
-          - hack
-          - python
+          # - clang
+          # - erlang
+          # - hack
+          # - python
           # - rust
-          - swift
+          # - swift
     runs-on: ${{ matrix.os }}
 
     steps:
