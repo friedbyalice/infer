@@ -555,7 +555,7 @@ let conservative_array_length ?traces arr_locs mem =
 
 
 let eval_array_locs_length arr_locs mem =
-  if PowLoc.is_bot arr_locs then Val.Itv.top
+  if PowLoc.is_bot arr_locs then Val.Itv.nat
   else
     let arr = Mem.find_set arr_locs mem in
     let traces = Val.get_traces arr in
