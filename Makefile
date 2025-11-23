@@ -533,7 +533,7 @@ ifeq ($(BUILD_SWIFT_ANALYZERS), yes)
 	llvm_version=$$(llvm-config --version | cut -f1 -d.)-static-infer; \
 	$(call silent_on_success,Installing our LLVM OCaml bindings,\
 	opam update local-llvm && \
-	opam install --yes 
+	opam install --yes)
 endif
 
 .PHONY: clang_plugin
