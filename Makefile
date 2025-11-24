@@ -533,7 +533,7 @@ ifeq ($(BUILD_SWIFT_ANALYZERS), yes)
 	llvm_version=$$(llvm-config --version | cut -f1 -d.)-static-infer; \
 	$(call silent_on_success,Installing our LLVM OCaml bindings,\
 	opam update local-llvm && \
-	opam install --yes)
+	opam install --yes --no-depext llvm.$$llvm_version)
 endif
 
 .PHONY: clang_plugin
@@ -960,7 +960,7 @@ devsetup:
 	  OPAMSWITCH=$(OPAMSWITCH); \
 	  $(OPAM) install ocamlformat.$$($(OPAM) show -f version $(ROOT_DIR)/opam/ocamlformat.opam.locked) --yes)
 	$(QUIET)$(call silent_on_success,installing $(OPAM_DEV_DEPS),\
-	  OPAMSWITCH=$(OPAMSWITCH); $(OPAM) install --yes $(OPAM_DEV_DEPS))
+	  OPAMSWITCH=$(OPAMSWITCH); $(OPAM) install --yes --no-depexts user-setup $(OPAM_DEV_DEPS))
 	$(QUIET)if [ "$(PLATFORM)" = "Darwin" ] && [ x"$(GNU_SED)" = x"no" ]; then \
 	  echo '$(TERM_INFO)*** Installing GNU sed$(TERM_RESET)' >&2; \
 	  brew install gnu-sed; \
