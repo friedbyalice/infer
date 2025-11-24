@@ -1,10 +1,7 @@
 set -ex
 
-apt-get update
-
+apt update
 mkdir -p /usr/share/man/man1
-
-update update
 
 apt install --yes \
   clang-19 \
@@ -31,7 +28,8 @@ apt install --yes \
   unzip \
   xz-utils \
   zlib1g-dev \
-  rsync
+  rsync \
+  parallel
 
 rm -rf /var/lib/apt/lists/*
 
@@ -49,3 +47,6 @@ make devsetup
 
 # build infer with make -j for the first time
 make -j -C infer/src
+
+echo 'export PATH="/workspaces/infer/infer/bin":$PATH' >> "/root/.bashrc"
+echo 'export MANPATH="/workspaces/infer/infer/man":$MANPATH' >> "/root/.bashrc"
