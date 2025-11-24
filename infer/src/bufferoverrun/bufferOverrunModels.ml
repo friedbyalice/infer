@@ -1639,7 +1639,7 @@ module JavaString = struct
 
 
   let split_with_limit exp limit_exp =
-    match exp with
+    match limit_exp with
     (* TODO: actually a value of -1 would give a different behavior then 0,
       as the resulting length can be gt exp.length *)
     | Exp.Const (Const.Cint climit) when IntLit.leq climit IntLit.zero ->
