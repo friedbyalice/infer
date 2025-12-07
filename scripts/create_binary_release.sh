@@ -40,7 +40,7 @@ rm -fr "$RELEASE_NAME"
 
 ./build-infer.sh --only-setup-opam ${2:+"$2"}
 eval $(opam env)
-touch .release
+# touch .release
 ./autogen.sh
 if [ -z ${var+x} ] && [ "$2" != "all" ]; then
     CONFIGURE_PREPEND_OPTS=""
