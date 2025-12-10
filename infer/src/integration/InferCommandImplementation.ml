@@ -349,8 +349,28 @@ let report_diff () =
 
 let sem_diff () =
   let open Config in
-  match Option.both semdiff_previous semdiff_current with
-  | None ->
-      L.die UserError "Expected '--semdiff-current' and '--semdiff-previous' to be specified."
-  | Some (previous, current) ->
+  match (Option.both semdiff_previous semdiff_current, Config.semdiff_test_files_index) with
+  | None, None ->
+      L.die UserError
+        "Expected '--semdiff-current' and '--semdiff-previous' to be specified, or \
+         '--semdiff-test-files-index' for tests."
+  | Some (previous, current), None ->
       PythonCompareWithoutTypeAnnot.semdiff previous current
+  | None, Some index_filename -> (
+      let f node =
+        List.iter Config.semdiff_test_actions ~f:(function
+          | `Normalize ->
+              PythonCompareWithoutTypeAnnot.normalize node |> ignore
+          | `Currify ->
+              PythonSourceAstDiff.store_ast node |> ignore )
+      in
+      match PythonSourceAst.iter_from_index ~f ~index_filename with
+      | Ok () ->
+          ()
+      | Error errors ->
+          if Config.semdiff_test_show_syntax_errors then
+            List.iter errors ~f:(L.user_error "%a" PythonSourceAst.pp_error) )
+  | Some _, Some _ ->
+      L.die UserError
+        "option '--semdiff-test-files-index' can not be used at the same time than \
+         '--semdiff-current' and '--semdiff-previous'."

@@ -112,14 +112,21 @@ end
 type transform_error = {loc: Location.t; msg: string Lazy.t}
 
 let pp_transform_error sourcefile fmt {loc; msg} =
-  F.fprintf fmt "Textual Transformation Error: %s: %a, %a" (Lazy.force msg) SourceFile.pp sourcefile
-    Location.pp loc
+  F.fprintf fmt "Textual: Transformation Error: %s in %a at %a" (Lazy.force msg) SourceFile.pp
+    sourcefile Location.pp loc
 
 
 exception TextualTransformError of transform_error list
 
+let seq_fallible_fold ?(errors = []) ~init ~f seq =
+  Seq.fold_left
+    (fun (acc, errors) x ->
+      try (f acc x, errors) with TextualTransformError errors' -> (acc, errors @ errors') )
+    (init, errors) seq
+
+
 module type NAME = sig
-  type t = {value: string; loc: Location.t [@compare.ignore]} [@@deriving compare, equal, hash]
+  type t = {value: string; loc: Location.t [@ignore]} [@@deriving compare, equal, hash]
 
   val of_string : ?loc:Location.t -> string -> t
 
@@ -140,8 +147,7 @@ end
 
 module Name : NAME = struct
   module T = struct
-    type t = {value: string; loc: Location.t [@compare.ignore] [@equal.ignore] [@hash.ignore]}
-    [@@deriving compare, equal, hash]
+    type t = {value: string; loc: Location.t [@ignore]} [@@deriving compare, equal, hash]
   end
 
   include T
@@ -239,6 +245,8 @@ module TypeName : sig
 
   val of_string_no_dot_escape : string -> t
 
+  val sil_string : t
+
   val pp : F.formatter -> t -> unit
 
   module Hashtbl : Hashtbl.S with type key = t
@@ -290,6 +298,8 @@ end = struct
     in
     {name= BaseTypeName.swift_type_name; args= fst_arg :: snd_arg}
 
+
+  let sil_string = of_string "String"
 
   let rec pp fmt {name; args} =
     if List.is_empty args then BaseTypeName.pp fmt name
@@ -535,6 +545,8 @@ module Typ = struct
   type annotated = {typ: t; attributes: Attr.t list}
 
   let is_annotated ~f {attributes} = List.exists ~f attributes
+
+  let is_pointer typ = match typ with Ptr _ -> true | _ -> false
 
   let pp_annotated fmt {typ; attributes} =
     List.iter attributes ~f:(fun attr -> F.fprintf fmt "%a " Attr.pp attr) ;

@@ -54,7 +54,8 @@ let pp verbosity fmt osig =
         F.fprintf fmt "%s%s%s" (Typ.Name.name osig.class_name) sep
           (Mangled.to_string osig.method_name)
     | Verbose ->
-        F.fprintf fmt "%s%s%a" (Typ.Name.name osig.class_name) sep Mangled.pp osig.method_name )
+        F.fprintf fmt "%s%s%a" (Typ.Name.name osig.class_name) sep Mangled.pp_full osig.method_name
+    )
   | Function osig -> (
     match verbosity with
     | Simple | Non_verbose | NameOnly | FullNameOnly ->
@@ -69,3 +70,6 @@ let builtin_from_string =
   let tbl = IString.Hash.create 100 in
   List.iter all_of_builtin ~f:(fun builtin -> IString.Hash.add tbl (show_builtin builtin) builtin) ;
   fun str -> IString.Hash.find_opt tbl str
+
+
+let to_string osig = Format.asprintf "%a" (pp Simple) osig

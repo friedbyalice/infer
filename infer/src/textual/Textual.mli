@@ -88,6 +88,10 @@ module TypeName : sig
 
   val mk_swift_type_name : ?plain_name:string -> string -> t
 
+  val sil_string : t
+
+  (** the name of the Textual string type *)
+
   val pp : F.formatter -> t -> unit
 
   module Hashtbl : Hashtbl.S with type key = t
@@ -226,6 +230,8 @@ module Typ : sig
   val any_type_llvm : t
 
   val any_type_swift : t
+
+  val is_pointer : t -> bool
 end
 
 module Ident : sig
@@ -529,6 +535,13 @@ end
 type transform_error = {loc: Location.t; msg: string Lazy.t}
 
 val pp_transform_error : SourceFile.t -> F.formatter -> transform_error -> unit
+
+val seq_fallible_fold :
+     ?errors:transform_error list
+  -> init:'a
+  -> f:('a -> 'b -> 'a)
+  -> 'b Seq.t
+  -> 'a * transform_error list
 
 exception TextualTransformError of transform_error list
 

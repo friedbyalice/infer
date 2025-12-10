@@ -8,7 +8,7 @@
 open! IStd
 open! Llair
 module L = Logging
-module ProcState = Llair2TextualProcState
+module ProcState = Llair2TextualState
 
 let to_textual_type_name lang ?plain_name name =
   if Textual.Lang.is_swift lang then Textual.TypeName.mk_swift_type_name ?plain_name name
@@ -279,31 +279,39 @@ let join_typ typ1_opt typ2_opt =
       None
 
 
-let signature_structs = Hash_set.create (module String)
-(* Create a new empty set *)
-
-let rec signature_type_to_textual_typ lang signature_type =
+let rec signature_type_to_textual_typ signature_structs lang signature_type =
   if String.is_suffix signature_type ~suffix:"*" then
     let name = String.chop_suffix_if_exists signature_type ~suffix:"*" in
-    match signature_type_to_textual_typ lang name with
+    match signature_type_to_textual_typ signature_structs lang name with
     | Some typ ->
         Some (Textual.Typ.Ptr typ)
     | None ->
         None
   else if String.equal signature_type "Int" then Some Textual.Typ.Int
-  else if String.equal signature_type "<unknown>" then None
+  else if String.equal signature_type "<unknown>" || String.is_empty signature_type then None
   else if String.equal signature_type "$sytD" then Some Textual.Typ.Void
-  else (
-    Hash_set.add signature_structs signature_type ;
+  else
     let struct_name =
-      if Textual.Lang.is_swift lang then to_textual_type_name lang ~plain_name:signature_type ""
+      if Textual.Lang.is_swift lang then (* optional type *)
+        if String.is_suffix signature_type ~suffix:"SgD" then
+          let type_name = String.chop_suffix_if_exists signature_type ~suffix:"SgD" in
+          let type_name = String.substr_replace_first type_name ~pattern:"$s" ~with_:"T" in
+          to_textual_type_name lang type_name
+        else (
+          Hash_set.add signature_structs signature_type ;
+          to_textual_type_name lang ~plain_name:signature_type "" )
       else to_textual_type_name lang signature_type
     in
     if Textual.Lang.is_c lang then Some (Textual.Typ.Struct struct_name)
-    else Some Textual.Typ.(Ptr (Textual.Typ.Struct struct_name)) )
+    else Some Textual.Typ.(Ptr (Textual.Typ.Struct struct_name))
 
 
-let update_struct_name struct_name =
+let pp_signature_structs fmt signature_structs =
+  let pp_item fmt key = Format.fprintf fmt "%s@." key in
+  Hash_set.iter signature_structs ~f:(pp_item fmt)
+
+
+let update_struct_name signature_structs struct_name =
   match mangled_name_of_type_name struct_name with
   | Some typ_name
     when String.is_suffix ~suffix:"C" typ_name || String.is_suffix ~suffix:"V" typ_name -> (
@@ -321,7 +329,7 @@ let update_struct_name struct_name =
       struct_name
 
 
-let update_signature_type struct_map type_name =
+let update_signature_type lang struct_map type_name =
   match plain_name_of_type_name type_name with
   | Some plain_name -> (
     match struct_name_of_plain_name struct_map plain_name with
@@ -333,8 +341,17 @@ let update_signature_type struct_map type_name =
           type_name )
     | None ->
         type_name )
-  | None ->
-      type_name
+  | None -> (
+    match mangled_name_of_type_name type_name with
+    | Some mangled_name -> (
+        let struct_name = struct_name_of_mangled_name lang struct_map mangled_name in
+        match plain_name_of_type_name struct_name with
+        | Some plain_name ->
+            update_type_name_with_plain_name ~plain_name struct_name
+        | None ->
+            type_name )
+    | None ->
+        type_name )
 
 
 let rec update_type ~update_struct_name typ =
@@ -366,7 +383,8 @@ let update_type_field_decl ~update_struct_name fields =
   List.map ~f:update_field_decl fields
 
 
-let update_struct_map struct_map =
+let update_struct_map signature_structs struct_map =
+  let update_struct_name x = update_struct_name signature_structs x in
   let update_struct_map struct_name (Textual.Struct.{fields: _} as struct_) struct_map =
     let new_struct_name = update_struct_name struct_name in
     let struct_ =

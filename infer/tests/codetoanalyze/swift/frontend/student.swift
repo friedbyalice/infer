@@ -72,6 +72,10 @@ class Person {
         self.age = age
         self.spouse = Person(age: 0)
     }
+
+    func setting_jane(_ jane: Person) {
+        self.spouse = jane
+    }
 }
 
 func test_retain_cycle_bad(_ john: Person, _ jane: Person) {
@@ -126,4 +130,100 @@ func test_optional_good_fp() {
 
 func test_optional_bad() {
     assert(test_optional(30) == 35)
+}
+
+func test_optional_person(_ person : Person?) -> Int {
+    if let actualPerson = person {
+        return actualPerson.age
+    }
+    else {
+        return 0
+    }
+}
+
+func test_optional_person_good() -> Int {
+    test_optional_person(Person(age: 30))
+}
+
+func test_optional_preson_nil_good() -> Int {
+    test_optional_person(nil)
+}
+
+// This reports an assertion error, but in prod it would just create
+// only one spec with person <> nil. In that case test_optional3_bad_FN
+// should report an NPE but it doesn't yet.
+func test_optional_crash_bad(_ person: Person?) -> Int {
+    return person!.age // This will crash if age is nil!
+}
+
+func test_optional3_bad_FN() -> Int {
+    test_optional_crash_bad(nil)
+}
+
+class ViewController {
+    var view: CustomView?
+
+    init() {
+        self.view = CustomView(delegate: self)
+    }
+}
+
+class CustomView {
+    var delegate: ViewController
+
+    init(delegate: ViewController) {
+        self.delegate = delegate
+    }
+}
+
+func retainCycleExample() {
+    let _ = ViewController()
+}
+
+class RetainCycleExample {
+    var id = 10
+    // The closure property
+    var closure: (() -> Void)?
+    func setupClosureBad() {
+        // Capturing self strongly inside the closure
+        closure = {
+            self.id = 20
+        }
+    }
+
+     func setupClosureOk() {
+       closure = { [weak self] in
+            self?.id = 20
+        }
+    }
+}
+
+final class State {
+    var delegate: DeviceAppManagerClientDelegate?
+}
+
+protocol DeviceAppManagerClientDelegate: AnyObject {}
+
+final class DeviceAppManagerDelegateImpl: DeviceAppManagerClientDelegate {
+    let onStartServiceResponse: () -> Void
+    init(onStartServiceResponse: @escaping () -> Void) {
+        self.onStartServiceResponse = onStartServiceResponse
+    }
+}
+
+func foo(_ state : State?) {}
+
+func test_retain_cycle_bad2() {
+    // Set up state and a reference to it
+    let state = State()
+    var stateRef: State? = state
+
+    // Create the delegate, capturing stateRef in the closure
+    let delegate = DeviceAppManagerDelegateImpl {
+        // This closure captures stateRef, creating a retain cycle
+        stateRef = nil
+    }
+    foo(stateRef)
+
+    state.delegate = delegate
 }
