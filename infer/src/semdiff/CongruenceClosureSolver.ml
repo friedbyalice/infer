@@ -20,7 +20,7 @@ module F = Format
 type value = string option [@@deriving equal, hash]
 
 module Atom : sig
-  type t = private {index: int; value: value}
+  type t = private {index: int; value: value} [@@deriving compare]
 
   val pp : F.formatter -> t -> unit
 
@@ -35,8 +35,10 @@ module Atom : sig
   val cardinal : state -> int
 
   val fold : state -> init:'a -> f:(t -> 'a -> 'a) -> 'a
+
+  module Set : Stdlib.Set.S with type elt = t
 end = struct
-  type t = {index: int; value: value}
+  type t = {index: int; value: value [@ignore]} [@@deriving compare]
 
   let pp fmt {index; value} =
     match value with None -> F.fprintf fmt "%%%d" index | Some value -> F.fprintf fmt "%s" value
@@ -70,6 +72,13 @@ end = struct
     let atom = {index= h.fresh; value= None} in
     h.fresh <- h.fresh + 1 ;
     atom
+
+
+  module Set = Stdlib.Set.Make (struct
+    type nonrec t = t
+
+    let compare = compare
+  end)
 end
 
 type atom_equation = {rhs: Atom.t; lhs: Atom.t}
@@ -109,31 +118,77 @@ module LookupTbl = Stdlib.Hashtbl.Make (struct
   let hash (a, b) = [%hash: int * int] (a.Atom.index, b.Atom.index)
 end)
 
+module Class : sig
+  type t
+
+  val of_atom : Atom.t -> t
+
+  val merge : t -> t -> t
+
+  val fold : t -> init:'a -> f:('a -> Atom.t -> 'a) -> 'a
+end = struct
+  (* represent a list of atoms without concatening them *)
+  type t = Atom of Atom.t | Merge of t * t
+
+  let of_atom atom = Atom atom
+
+  let merge c1 c2 =
+    (* we assume the input classes are disjoint *)
+    Merge (c1, c2)
+
+
+  let rec fold c ~init ~f =
+    match c with
+    | Atom a ->
+        f init a
+    | Merge (c1, c2) ->
+        let init = fold c1 ~init ~f in
+        fold c2 ~init ~f
+end
+
 type t =
   { repr: Atom.t Dynarray.t
   ; mutable pending: pending_item list
+  ; atoms: Atom.t Dynarray.t
+  ; classes: Class.t Dynarray.t
   ; use: app_equation list Dynarray.t
   ; lookup: app_equation LookupTbl.t
-  ; mk_app_history: (Atom.t * Atom.t) option Dynarray.t
+  ; input_app_equations: (Atom.t * Atom.t) option Dynarray.t
+  ; term_roots: Atom.Set.t Dynarray.t
   ; hashcons: Atom.state
-  ; enable_term_pp: bool
+  ; mutable update_count: int
   ; debug: bool }
 
-let init ~debug ~enable_term_pp =
+let init ~debug =
   { repr= Dynarray.create ()
   ; pending= []
+  ; atoms= Dynarray.create ()
+  ; classes= Dynarray.create ()
   ; use= Dynarray.create ()
   ; lookup= LookupTbl.create 32
-  ; mk_app_history= Dynarray.create ()
+  ; input_app_equations= Dynarray.create ()
+  ; term_roots= Dynarray.create ()
+  ; update_count= 0
   ; hashcons= Atom.init ()
-  ; enable_term_pp
   ; debug }
 
+
+let reset_update_count state = state.update_count <- 0
+
+let get_update_count state = state.update_count
+
+let incr_update_count state = state.update_count <- state.update_count + 1
 
 let rec representative state atom =
   (* TODO: path compression *)
   let parent = Dynarray.get state.repr atom.Atom.index in
   if phys_equal parent atom then atom else representative state parent
+
+
+let is_equiv state atom1 atom2 =
+  let atom1' = representative state atom1 in
+  let atom2' = representative state atom2 in
+  phys_equal atom1' atom2'
 
 
 let rec depth state atom =
@@ -145,16 +200,22 @@ let mk_atom state value =
   let atom, is_new = Atom.mk state.hashcons value in
   if is_new then (
     Dynarray.add_last state.repr atom ;
+    Dynarray.add_last state.atoms atom ;
+    Dynarray.add_last state.classes (Class.of_atom atom) ;
     Dynarray.add_last state.use [] ;
-    if state.enable_term_pp then Dynarray.add_last state.mk_app_history None ) ;
+    Dynarray.add_last state.input_app_equations None ;
+    Dynarray.add_last state.term_roots Atom.Set.empty ) ;
   atom
 
 
 let mk_fresh_atom state =
   let atom = Atom.mk_fresh state.hashcons in
   Dynarray.add_last state.repr atom ;
+  Dynarray.add_last state.atoms atom ;
+  Dynarray.add_last state.classes (Class.of_atom atom) ;
   Dynarray.add_last state.use [] ;
-  if state.enable_term_pp then Dynarray.add_last state.mk_app_history None ;
+  Dynarray.add_last state.input_app_equations None ;
+  Dynarray.add_last state.term_roots Atom.Set.empty ;
   atom
 
 
@@ -170,10 +231,26 @@ let set_use {use; debug} ({Atom.index} as atom) l =
   Dynarray.set use index l
 
 
-let get_mk_app_history {mk_app_history} atom = Dynarray.get mk_app_history atom.Atom.index
+let get_input_app_equation {input_app_equations} atom =
+  Dynarray.get input_app_equations atom.Atom.index
 
-let set_mk_app_history {mk_app_history} atom pair =
-  Dynarray.set mk_app_history atom.Atom.index (Some pair)
+
+let set_input_app_equation {input_app_equations} atom pair =
+  Dynarray.set input_app_equations atom.Atom.index (Some pair)
+
+
+let equiv_atoms state {Atom.index} =
+  Dynarray.get state.classes index |> Class.fold ~init:[] ~f:(fun l a -> a :: l)
+
+
+let equiv_terms state {Atom.index} =
+  Dynarray.get state.classes index
+  |> Class.fold ~init:[] ~f:(fun l rhs ->
+         match Dynarray.get state.input_app_equations rhs.Atom.index with
+         | None ->
+             l
+         | Some (left, right) ->
+             {rhs; left; right} :: l )
 
 
 let add_use state atom app_equation = set_use state atom (app_equation :: get_use state atom)
@@ -231,10 +308,16 @@ and propagate state =
       propagate state
 
 
-and change_representative state old_repr new_repr =
-  if state.debug then F.printf "repr[%a] <- %a\n" Atom.pp old_repr Atom.pp new_repr ;
-  Dynarray.set state.repr old_repr.Atom.index new_repr ;
-  (* TODO: update classes *)
+and change_representative ({debug; pending; repr; classes; term_roots} as state)
+    ({Atom.index= old_index} as old_repr) ({Atom.index= new_index} as new_repr) =
+  if debug then F.printf "repr[%a] <- %a\n" Atom.pp old_repr Atom.pp new_repr ;
+  incr_update_count state ;
+  Dynarray.set repr old_index new_repr ;
+  let old_class = Dynarray.get classes old_index in
+  let new_class = Dynarray.get classes new_index in
+  Dynarray.set classes new_index (Class.merge new_class old_class) ;
+  Dynarray.set term_roots new_index
+    (Atom.Set.union (Dynarray.get term_roots new_index) (Dynarray.get term_roots old_index)) ;
   let use_new_repr =
     get_use state old_repr
     |> List.fold
@@ -242,10 +325,10 @@ and change_representative state old_repr new_repr =
            let c1' = representative state c1 in
            let c2' = representative state c2 in
            let key = (c1', c2') in
-           if state.debug then F.printf "Lookup(%a,%a) ?\n" Atom.pp c1' Atom.pp c2' ;
+           if debug then F.printf "Lookup(%a,%a) ?\n" Atom.pp c1' Atom.pp c2' ;
            match lookup state key with
            | Some app_eq_d ->
-               state.pending <- PendingApp (app_eq_c, app_eq_d) :: state.pending ;
+               state.pending <- PendingApp (app_eq_c, app_eq_d) :: pending ;
                eqs
            | None ->
                set_lookup state key app_eq_c ;
@@ -257,16 +340,45 @@ and change_representative state old_repr new_repr =
 
 
 let mk_app state ~left ~right =
-  let term = App (left, right) in
-  let atom = mk_fresh_atom state in
-  merge state atom term ;
-  if state.enable_term_pp then set_mk_app_history state atom (left, right) ;
-  atom
+  let left' = representative state left in
+  let right' = representative state right in
+  match lookup state (left', right') with
+  | Some {rhs} ->
+      representative state rhs
+  | None ->
+      let term = App (left, right) in
+      let atom = mk_fresh_atom state in
+      merge state atom term ;
+      set_input_app_equation state atom (left, right) ;
+      atom
 
 
-let mk_term state ~header ~args =
-  let header_atom = mk_atom state header in
-  List.fold ~init:header_atom ~f:(fun left right -> mk_app state ~left ~right) args
+let add_term_root state ~header:{Atom.index} ~term =
+  let roots = Dynarray.get state.term_roots index in
+  Dynarray.set state.term_roots index (Atom.Set.add term roots)
+
+
+let fold_term_roots state {Atom.index} ~f ~init =
+  let roots = Dynarray.get state.term_roots index in
+  Atom.Set.fold
+    (fun atom acc -> if phys_equal (representative state atom) atom then f atom acc else acc)
+    roots init
+
+
+let iter_term_roots state atom ~f = fold_term_roots state atom ~init:() ~f:(fun atom () -> f atom)
+
+type header = Atom.t
+
+let mk_header = mk_atom
+
+let pp_header = Atom.pp
+
+let representative_of_header = representative
+
+let mk_term state header args =
+  let term = List.fold ~init:header ~f:(fun left right -> mk_app state ~left ~right) args in
+  add_term_root state ~header ~term ;
+  term
 
 
 let show_stats state =
@@ -275,13 +387,24 @@ let show_stats state =
   F.printf "size=%d\nmax_depth=%d\n" size max_depth
 
 
-let pp_nested_term state atom =
+let pp_nested_term state fmt atom =
   let rec pp ~internal fmt atom =
-    match get_mk_app_history state atom with
+    match get_input_app_equation state atom with
     | Some (left, right) ->
         if internal then F.fprintf fmt "%a@ %a" (pp ~internal:true) left (pp ~internal:false) right
         else F.fprintf fmt "@[<hv4>(%a@ %a)@]" (pp ~internal:true) left (pp ~internal:false) right
     | None ->
         Atom.pp fmt atom
   in
-  F.printf "%a@." (pp ~internal:false) atom
+  pp ~internal:false fmt atom
+
+
+let debug state =
+  F.printf "repr: @[<hv>" ;
+  Dynarray.iteri
+    (fun index atom ->
+      let repr = Dynarray.get state.repr index in
+      if index > 0 then F.printf "@ " ;
+      F.printf "%a is %a (repr=%a)" Atom.pp atom (pp_nested_term state) atom Atom.pp repr )
+    state.atoms ;
+  F.printf "@]@."

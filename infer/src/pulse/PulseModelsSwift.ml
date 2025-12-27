@@ -36,14 +36,26 @@ let closure_call orig_args () : unit DSL.model_monad =
   | proc_name_arg :: args -> (
       let* arg_dynamic_type_data = get_dynamic_type ~ask_specialization:true proc_name_arg in
       match arg_dynamic_type_data with
-      | Some {Formula.typ= {desc= Typ.Tstruct (SwiftClosure csig)}} ->
+      | Some {Formula.typ= {desc= Typ.Tstruct (SwiftClosure csig)}} -> (
           let proc_name = Procname.Swift (SwiftProcname.mk_function csig) in
           let args = List.mapi ~f:(fun i arg -> (Format.sprintf "arg_%d" i, arg)) args in
           Logging.d_printfln "calling %a with args = %a" Procname.pp proc_name
             (Pp.comma_seq (Pp.pair ~fst:String.pp ~snd:DSL.pp_aval))
             args ;
-          let* res = swift_call proc_name args in
-          assign_ret res
+          let* res_opt = swift_call proc_name args |> is_unsat in
+          match res_opt with
+          | Some res ->
+              assign_ret res
+          | None -> (
+              (* if the call is unsat, it could be because of mismatched arguments, because the specialised
+                 closure doesn't capture any variables, and so the captured argument is not needed. In this
+                 case, we try the call again, by removing the last argument, which will be null. *)
+              let args = List.take args (List.length args - 1) in
+              Logging.d_printfln "calling %a again with args = %a" Procname.pp proc_name
+                (Pp.comma_seq (Pp.pair ~fst:String.pp ~snd:DSL.pp_aval))
+                args ;
+              let* res_opt = swift_call proc_name args |> is_unsat in
+              match res_opt with Some res -> assign_ret res | None -> unreachable ) )
       | _ ->
           Logging.d_printfln "no method name found for closure %a" DSL.pp_aval proc_name_arg ;
           function_ptr_call args () )
@@ -89,6 +101,12 @@ let dynamic_call arg orig_args () : unit DSL.model_monad =
       closure_call (arg :: orig_args) ()
 
 
+let derived_enum_equals arg1 arg2 () : unit DSL.model_monad =
+  let open DSL.Syntax in
+  let* res = binop Binop.Eq arg1 arg2 in
+  assign_ret res
+
+
 let builtins_matcher builtin args : unit -> unit DSL.model_monad =
   let builtin_s = SwiftProcname.show_builtin builtin in
   match (builtin : SwiftProcname.builtin) with
@@ -99,6 +117,15 @@ let builtins_matcher builtin args : unit -> unit DSL.model_monad =
   | DynamicCall ->
       let arg, args = ProcnameDispatcherBuiltins.expect_at_least_1_arg args builtin_s in
       dynamic_call arg args
+  | DerivedEnumEquals -> (
+      let arg1, arg2, args = ProcnameDispatcherBuiltins.expect_at_least_2_args args builtin_s in
+      (* we are modelling the case for simple enums where there are two args here, in the case
+         of complex enums there can be more args, but we are not modelling that yet. *)
+      match args with
+      | [] ->
+          derived_enum_equals arg1 arg2
+      | _ ->
+          unknown args )
 
 
 let matchers : matcher list =

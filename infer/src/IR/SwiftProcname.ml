@@ -9,7 +9,7 @@ open! IStd
 module F = Format
 include PpDetailLevel
 
-type builtin = NonDet | InitTuple | DynamicCall
+type builtin = NonDet | InitTuple | DynamicCall | DerivedEnumEquals
 [@@deriving compare, equal, yojson_of, sexp, hash, normalize, enumerate]
 
 type t =
@@ -31,6 +31,8 @@ let show_builtin = function
       "llvm_init_tuple"
   | DynamicCall ->
       "llvm_dynamic_call"
+  | DerivedEnumEquals ->
+      "__derived_enum_equals"
 
 
 let get_function_name osig =
@@ -43,15 +45,23 @@ let get_function_name osig =
       Mangled.from_string (show_builtin builtin)
 
 
-let pp verbosity fmt osig =
+let pp_plain_class_name fmt proc_name =
+  match proc_name with
+  | ClassMethod {class_name= Typ.SwiftClass name} ->
+      SwiftClassName.pp_plain_name fmt name
+  | _ ->
+      ()
+
+
+let pp verbosity fmt proc_name =
   let sep = "." in
-  match osig with
+  match proc_name with
   | ClassMethod osig -> (
     match verbosity with
     | Simple ->
         F.pp_print_string fmt (Mangled.to_string osig.method_name)
     | Non_verbose | NameOnly | FullNameOnly ->
-        F.fprintf fmt "%s%s%s" (Typ.Name.name osig.class_name) sep
+        F.fprintf fmt "%a%s%s" pp_plain_class_name proc_name sep
           (Mangled.to_string osig.method_name)
     | Verbose ->
         F.fprintf fmt "%s%s%a" (Typ.Name.name osig.class_name) sep Mangled.pp_full osig.method_name

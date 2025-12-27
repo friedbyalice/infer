@@ -8,10 +8,8 @@
 open! IStd
 module F = Format
 
-type value = string option
-
 module Atom : sig
-  type t
+  type t [@@deriving compare]
 
   val pp : F.formatter -> t -> unit
 end
@@ -22,18 +20,42 @@ val pp_term : F.formatter -> term -> unit
 
 type t
 
-val pp_nested_term : t -> Atom.t -> unit
+val pp_nested_term : t -> F.formatter -> Atom.t -> unit
 
-val init : debug:bool -> enable_term_pp:bool -> t
+val init : debug:bool -> t
 
-val mk_atom : t -> string -> Atom.t
+type header = private Atom.t
+
+val pp_header : F.formatter -> header -> unit
+
+val mk_header : t -> string -> header
 
 val mk_app : t -> left:Atom.t -> right:Atom.t -> Atom.t
 
-val mk_term : t -> header:string -> args:Atom.t list -> Atom.t
+val mk_term : t -> header -> Atom.t list -> Atom.t
 
 val merge : t -> Atom.t -> term -> unit
 
+val is_equiv : t -> Atom.t -> Atom.t -> bool
+
 val representative : t -> Atom.t -> Atom.t
 
+val representative_of_header : t -> header -> Atom.t
+
+val fold_term_roots : t -> header -> f:(Atom.t -> 'a -> 'a) -> init:'a -> 'a
+
+val iter_term_roots : t -> header -> f:(Atom.t -> unit) -> unit
+
+val equiv_atoms : t -> Atom.t -> Atom.t list
+
+type app_equation = {rhs: Atom.t; left: Atom.t; right: Atom.t}
+
+val equiv_terms : t -> Atom.t -> app_equation list
+
+val reset_update_count : t -> unit
+
+val get_update_count : t -> int
+
 val show_stats : t -> unit
+
+val debug : t -> unit

@@ -15,13 +15,17 @@ val get_element_ptr_offset_prefix : string
 
 val get_fresh_fake_line : unit -> int
 
-type structMap = Textual.Struct.t Textual.TypeName.Map.t
+type struct_map = Textual.Struct.t Textual.TypeName.Map.t
 
-type globalMap = Llair.GlobalDefn.t Textual.VarName.Map.t
+type globals_map = Llair.GlobalDefn.t Textual.VarName.Map.t
 
-type procMap = Textual.ProcDecl.t Textual.QualifiedProcName.Map.t
+type proc_map = Textual.ProcDecl.t Textual.QualifiedProcName.Map.t
 
-type methodClassIndex = Textual.TypeName.t Textual.ProcName.Hashtbl.t
+type mangled_map = Textual.TypeName.t IString.Map.t
+
+type plain_map = Textual.TypeName.t IString.Map.t
+
+type method_class_index = Textual.TypeName.t Textual.ProcName.Hashtbl.t
 
 module ClassNameOffset : sig
   type t = {class_name: Textual.TypeName.t; offset: int}
@@ -29,47 +33,64 @@ end
 
 module ClassNameOffsetMap : Stdlib.Hashtbl.S with type key = ClassNameOffset.t
 
-type classNameOffsetMap = Textual.QualifiedProcName.t ClassNameOffsetMap.t
+type class_name_offset_map = Textual.QualifiedProcName.t ClassNameOffsetMap.t
+
+module FieldOffset : sig
+  type t = {class_name: Textual.TypeName.t; offset: int}
+end
+
+module FieldOffsetMap : Stdlib.Hashtbl.S with type key = FieldOffset.t
+
+type field_offset_map = Textual.FieldName.t FieldOffsetMap.t
 
 module ClassMethodIndex : sig
   type t = (Textual.QualifiedProcName.t * int) list Textual.TypeName.Hashtbl.t
 
   val pp : F.formatter -> t -> unit
 
-  val fill_class_name_offset_map : t -> Textual.QualifiedProcName.t ClassNameOffsetMap.t
+  val fill_class_name_offset_map : t -> class_name_offset_map
 end
 
 module ModuleState : sig
   type t = private
     { functions: (Llair.FuncName.t * Llair.func) list
-    ; struct_map: Textual.Struct.t Textual.TypeName.Map.t
+    ; struct_map: struct_map
+    ; mangled_map: mangled_map
+    ; plain_map: plain_map
     ; proc_decls: Textual.ProcDecl.t list
-    ; proc_map: procMap
-    ; globals_map: globalMap
+    ; proc_map: proc_map
+    ; globals_map: globals_map
     ; lang: Textual.Lang.t
-    ; method_class_index: methodClassIndex
-    ; class_name_offset_map: Textual.QualifiedProcName.t ClassNameOffsetMap.t }
+    ; method_class_index: method_class_index
+    ; class_name_offset_map: class_name_offset_map
+    ; field_offset_map: field_offset_map }
 
   val init :
        functions:(Llair.FuncName.t * Llair.func) list
-    -> struct_map:Textual.Struct.t Textual.TypeName.Map.t
+    -> struct_map:struct_map
+    -> mangled_map:mangled_map
+    -> plain_map:plain_map
     -> proc_decls:Textual.ProcDecl.t list
-    -> proc_map:procMap
-    -> globals_map:globalMap
+    -> proc_map:proc_map
+    -> globals_map:globals_map
     -> lang:Textual.Lang.t
-    -> method_class_index:methodClassIndex
-    -> class_name_offset_map:Textual.QualifiedProcName.t ClassNameOffsetMap.t
+    -> method_class_index:method_class_index
+    -> class_name_offset_map:class_name_offset_map
+    -> field_offset_map:field_offset_map
     -> t
 end
 
 module ProcState : sig
+  type id_data = {typ: Textual.Typ.annotated; no_deref_needed: bool}
+
   type t = private
     { qualified_name: Textual.QualifiedProcName.t
     ; sourcefile: SourceFile.t
     ; loc: Textual.Location.t
     ; mutable locals: Textual.Typ.annotated VarMap.t
     ; mutable formals: (Textual.Typ.annotated * Textual.VarName.t option) VarMap.t
-    ; mutable ids_move: Textual.Typ.annotated IdentMap.t
+    ; mutable local_map: Textual.Typ.t Textual.VarName.Hashtbl.t
+    ; mutable ids_move: id_data IdentMap.t
     ; mutable ids_types: Textual.Typ.annotated IdentMap.t
     ; mutable id_offset: (Textual.Ident.t * int) option
     ; mutable get_element_ptr_offset: (Textual.VarName.t * int) option
@@ -92,7 +113,8 @@ module ProcState : sig
 
   val update_locals : proc_state:t -> VarMap.key -> Textual.Typ.annotated -> unit
 
-  val update_ids_move : proc_state:t -> IdentMap.key -> Textual.Typ.annotated -> unit
+  val update_ids_move :
+    proc_state:t -> IdentMap.key -> Textual.Typ.annotated -> no_deref_needed:bool -> unit
 
   val update_ids_types : proc_state:t -> IdentMap.key -> Textual.Typ.annotated -> unit
 

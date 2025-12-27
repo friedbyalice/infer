@@ -7,16 +7,37 @@
 
 open! IStd
 module F = Format
+module CC = CongruenceClosureSolver
+module Rewrite = CongruenceClosureRewrite
 
-let%expect_test "" =
+let build_parser () =
   let parser = PythonSourceAst.build_parser () in
+  fun string -> parser string |> Result.ok |> Option.value_exn
+
+
+let st = ref (CC.init ~debug:false)
+
+let restart () = st := CC.init ~debug:false
+
+let parse_pattern str = Rewrite.parse_pattern !st str |> Option.value_exn
+
+let pp_rules fmt rules =
+  F.fprintf fmt "@[<hv1>{" ;
+  List.iteri rules ~f:(fun i rule ->
+      Rewrite.Rule.pp fmt rule ;
+      if i > 0 then F.fprintf fmt "@ " ) ;
+  F.fprintf fmt "@]}"
+
+
+let%expect_test "store ast" =
+  let parser = build_parser () in
   let ast = parser {|
 x = 0
 y = 1
 z = 2
-      |} |> Result.ok |> Option.value_exn in
+      |} in
   F.printf "%s\n" (PythonSourceAst.Node.to_str ast) ;
-  PythonSourceAstDiff.store_ast ~debug:true ~enable_term_pp:true ast ;
+  PythonSourceAstDiff.TestOnly.store_ast ~debug:true ast ;
   [%expect
     {|
     Dict: {
@@ -115,4 +136,96 @@ z = 2
                     (type_comment Null)
                     (value (Constant (kind Null) (value 2))))))
         (type_ignores List))
+    |}]
+
+
+let%expect_test "compare same ast" =
+  let parser = build_parser () in
+  restart () ;
+  let ast =
+    parser
+      {|
+def factorial(n):
+    """
+    Returns the factorial of a non-negative integer n.
+    Raises ValueError for negative inputs.
+    """
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    result = 1
+    for i in range(2, n + 1):
+        result *= i
+    return result
+      |}
+  in
+  let equiv = PythonSourceAstDiff.are_ast_equivalent !st ast ast [] in
+  F.printf "ast == ast? %b\n" equiv ;
+  [%expect {| ast == ast? true |}]
+
+
+let%expect_test "ignore_me() call" =
+  let parser = build_parser () in
+  restart () ;
+  let ast =
+    parser
+      {|
+def factorial(n):
+    """
+    Returns the factorial of a non-negative integer n.
+    Raises ValueError for negative inputs.
+    """
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    result = 1
+    for i in range(2, n + 1):
+        result *= i
+    return result
+      |}
+  in
+  let ast_with_ignore =
+    parser
+      {|
+def factorial(n):
+    """
+    Returns the factorial of a non-negative integer n.
+    Raises ValueError for negative inputs.
+    """
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    result = 1
+    ignore_me()
+    for i in range(2, n + 1):
+        result *= i
+    return result
+      |}
+  in
+  let equiv = PythonSourceAstDiff.are_ast_equivalent !st ast ast_with_ignore [] in
+  F.printf "ast == ast_with_ignore? %b (no rules)\n" equiv ;
+  let rules : Rewrite.Rule.t list =
+    [ { lhs= parse_pattern "(List ?X1 ?X2 ?X3 Null ?X5 ?X6)"
+      ; rhs= parse_pattern "(List ?X1 ?X2 ?X3 ?X5 ?X6)" }
+    ; { lhs=
+          parse_pattern
+            {|(Expr
+                (value
+                  (Call
+                    (args List)
+                    (func (Name (ctx Load) (id ignore_me)))
+                    (keywords List))))|}
+      ; rhs= parse_pattern "Null" } ]
+  in
+  let equiv = PythonSourceAstDiff.are_ast_equivalent !st ast ast_with_ignore rules in
+  F.printf "ast == ast_with_ignore? %b@." equiv ;
+  F.printf " with rules: %a@." pp_rules rules ;
+  [%expect
+    {|
+    ast == ast_with_ignore? false (no rules)
+    ast == ast_with_ignore? true
+     with rules: {(List ?X1 ?X2 ?X3 Null ?X5 ?X6) ==> (List ?X1 ?X2 ?X3 ?X5 ?X6)
+                  (Expr
+                      (value
+                          (Call (args List) (func (Name (ctx Load) (id ignore_me))) (keywords List))))
+                  ==>
+                  Null
+                  }
     |}]

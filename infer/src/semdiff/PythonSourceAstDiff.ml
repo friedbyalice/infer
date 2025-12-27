@@ -8,34 +8,46 @@
 open! IStd
 module F = Format
 module CC = CongruenceClosureSolver
+module Rewrite = CongruenceClosureRewrite
 open PythonSourceAst
 
 (* currying AST -> CongruenceClosure terms *)
 let rec curry cc ast =
+  let mk_const header = CC.mk_term cc (CC.mk_header cc header) [] in
+  let mk_term header args = CC.mk_term cc (CC.mk_header cc header) args in
   match (ast : Node.t) with
   | Null ->
-      CC.mk_atom cc "Null"
+      mk_const "Null"
   | Bool b ->
-      CC.mk_atom cc (F.asprintf "%b" b)
+      mk_const (F.asprintf "%b" b)
   | Float f ->
-      CC.mk_atom cc (F.asprintf "%f" f)
+      mk_const (F.asprintf "%f" f)
   | Int i ->
-      CC.mk_atom cc (F.asprintf "%d" i)
+      mk_const (F.asprintf "%d" i)
   | Str s ->
-      CC.mk_atom cc s
+      mk_const s
   | List l ->
-      CC.mk_term cc ~header:"List" ~args:(List.map ~f:(curry cc) l)
+      mk_term "List" (List.map ~f:(curry cc) l)
   | Dict dict ->
       let header, assoc = Node.assoc_of_dict dict in
       let mk_atom_binding (field_name, ast) =
-        let left = CC.mk_atom cc field_name in
+        let left = mk_const field_name in
         let right = curry cc ast in
         CC.mk_app cc ~left ~right
       in
-      CC.mk_term cc ~header ~args:(List.map ~f:mk_atom_binding assoc)
+      mk_term header (List.map ~f:mk_atom_binding assoc)
 
 
-let store_ast ?(debug = false) ?(enable_term_pp = false) ast =
-  let cc = CC.init ~debug:false ~enable_term_pp in
-  let atom = curry cc ast in
-  if debug then CC.pp_nested_term cc atom
+let are_ast_equivalent cc ast1 ast2 rules =
+  let atom1 = curry cc ast1 in
+  let atom2 = curry cc ast2 in
+  let _rounds = Rewrite.Rule.full_rewrite cc rules in
+  CC.is_equiv cc atom1 atom2
+
+
+module TestOnly = struct
+  let store_ast ?(debug = false) ast =
+    let cc = CC.init ~debug:false in
+    let atom = curry cc ast in
+    if debug then F.printf "%a" (CC.pp_nested_term cc) atom
+end

@@ -227,3 +227,61 @@ func test_retain_cycle_bad2() {
 
     state.delegate = delegate
 }
+
+enum Day {
+    case monday
+    case tuesday
+    case wednesday
+    case thursday
+    case friday
+    case saturday
+    case sunday
+}
+
+func isWeekend(_ day: Day) -> Bool {
+    return day == .saturday || day == .sunday
+}
+
+func using_enums_with_thursday_bad() {
+    let today = Day.thursday
+    assert(isWeekend(today) == true) //assertion error reported here because it's false
+}
+
+func using_enums_with_saturday_bad() {
+    let today = Day.saturday
+    assert(isWeekend(today) == false) //assertion error reported here because it's true
+}
+
+func using_enums_with_sunday_bad() {
+    let today = Day.sunday
+    assert(isWeekend(today) == false) //assertion error reported here because it's true
+}
+
+func using_enums_with_thursday_ok() {
+    let today = Day.thursday
+    assert(isWeekend(today) == false)
+}
+
+func using_enums_with_saturday_ok() {
+    let today = Day.saturday
+    assert(isWeekend(today) == true)
+}
+
+// Example that shows we do not crash on complex enums
+// We haven't yet checked that we translate correctly the semantics of this code,
+// but it doesn't crash and it doesn't have typechecking errors.
+enum CoverPictureModel: Equatable {
+    case empty
+    case upload(imageName: String)
+}
+class Profile {
+    public private(set) var coverPictureModel: CoverPictureModel = .empty {
+        didSet {
+            guard coverPictureModel != oldValue else { return }
+            updateCollectionViewForItems(["coverPicture"])
+        }
+    }
+    func updateCollectionViewForItems(_ items: [String]) {
+        print("Updating collection view for items: \(items)")
+    }
+}

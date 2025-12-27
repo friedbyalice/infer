@@ -13,13 +13,17 @@ module RegMap = Llair.Exp.Reg.Map
 
 let get_element_ptr_offset_prefix = "getelementptr_offset"
 
-type structMap = Textual.Struct.t Textual.TypeName.Map.t
+type struct_map = Textual.Struct.t Textual.TypeName.Map.t
 
-type globalMap = Llair.GlobalDefn.t Textual.VarName.Map.t
+type globals_map = Llair.GlobalDefn.t Textual.VarName.Map.t
 
-type procMap = Textual.ProcDecl.t Textual.QualifiedProcName.Map.t
+type proc_map = Textual.ProcDecl.t Textual.QualifiedProcName.Map.t
 
-type methodClassIndex = Textual.TypeName.t Textual.ProcName.Hashtbl.t
+type mangled_map = Textual.TypeName.t IString.Map.t
+
+type plain_map = Textual.TypeName.t IString.Map.t
+
+type method_class_index = Textual.TypeName.t Textual.ProcName.Hashtbl.t
 
 module ClassNameOffset = struct
   type t = {class_name: Textual.TypeName.t; offset: int} [@@deriving compare, hash, equal]
@@ -27,7 +31,16 @@ end
 
 module ClassNameOffsetMap = Stdlib.Hashtbl.Make (ClassNameOffset)
 
-type classNameOffsetMap = Textual.QualifiedProcName.t ClassNameOffsetMap.t
+type class_name_offset_map = Textual.QualifiedProcName.t ClassNameOffsetMap.t
+
+(* Map from (class_name, offset) to field_name for struct fields *)
+module FieldOffset = struct
+  type t = {class_name: Textual.TypeName.t; offset: int} [@@deriving compare, hash, equal]
+end
+
+module FieldOffsetMap = Stdlib.Hashtbl.Make (FieldOffset)
+
+type field_offset_map = Textual.FieldName.t FieldOffsetMap.t
 
 module ClassMethodIndex = struct
   type t = (Textual.QualifiedProcName.t * int) list Textual.TypeName.Hashtbl.t
@@ -58,34 +71,47 @@ end
 module ModuleState = struct
   type t =
     { functions: (Llair.FuncName.t * Llair.func) list
-    ; struct_map: Textual.Struct.t Textual.TypeName.Map.t
+    ; struct_map: struct_map
+    ; mangled_map: mangled_map
+    ; plain_map: plain_map
     ; proc_decls: Textual.ProcDecl.t list
-    ; proc_map: procMap
-    ; globals_map: Llair.GlobalDefn.t VarMap.t
+    ; proc_map: proc_map
+    ; globals_map: globals_map
     ; lang: Textual.Lang.t
-    ; method_class_index: methodClassIndex
-    ; class_name_offset_map: Textual.QualifiedProcName.t ClassNameOffsetMap.t }
+    ; method_class_index: method_class_index
+    ; class_name_offset_map: class_name_offset_map
+    ; field_offset_map: field_offset_map }
 
-  let init ~functions ~struct_map ~proc_decls ~proc_map ~globals_map ~lang ~method_class_index
-      ~class_name_offset_map =
+  let init ~functions ~struct_map ~mangled_map ~plain_map ~proc_decls ~proc_map ~globals_map ~lang
+      ~method_class_index ~class_name_offset_map ~field_offset_map =
     { functions
     ; struct_map
+    ; mangled_map
+    ; plain_map
     ; proc_decls
     ; proc_map
     ; globals_map
     ; lang
     ; method_class_index
-    ; class_name_offset_map }
+    ; class_name_offset_map
+    ; field_offset_map }
 end
 
 module ProcState = struct
+  type id_data = {typ: Textual.Typ.annotated; no_deref_needed: bool}
+
+  let pp_data fmt {typ; no_deref_needed} =
+    F.fprintf fmt "typ:%a, no_deref_needed: %b" Textual.Typ.pp_annotated typ no_deref_needed
+
+
   type t =
     { qualified_name: Textual.QualifiedProcName.t
     ; sourcefile: SourceFile.t
     ; loc: Textual.Location.t
     ; mutable locals: Textual.Typ.annotated VarMap.t
     ; mutable formals: (Textual.Typ.annotated * Textual.VarName.t option) VarMap.t
-    ; mutable ids_move: Textual.Typ.annotated IdentMap.t
+    ; mutable local_map: Textual.Typ.t Textual.VarName.Hashtbl.t
+    ; mutable ids_move: id_data IdentMap.t
     ; mutable ids_types: Textual.Typ.annotated IdentMap.t
     ; mutable id_offset: (Textual.Ident.t * int) option
     ; mutable get_element_ptr_offset: (Textual.VarName.t * int) option
@@ -100,6 +126,7 @@ module ProcState = struct
     ; loc
     ; formals
     ; locals= VarMap.empty
+    ; local_map= Textual.VarName.Hashtbl.create 16
     ; ids_move= IdentMap.empty
     ; ids_types= IdentMap.empty
     ; id_offset= None
@@ -138,6 +165,11 @@ module ProcState = struct
         (Pp.comma_seq (Pp.pair ~fst:Textual.Ident.pp ~snd:Textual.Typ.pp_annotated))
         (IdentMap.bindings current_ids)
     in
+    let pp_ids_data fmt current_ids =
+      F.fprintf fmt "%a"
+        (Pp.comma_seq (Pp.pair ~fst:Textual.Ident.pp ~snd:pp_data))
+        (IdentMap.bindings current_ids)
+    in
     let pp_vars fmt vars =
       F.fprintf fmt "%a"
         (Pp.comma_seq (Pp.pair ~fst:Textual.VarName.pp ~snd:Textual.Typ.pp_annotated))
@@ -167,7 +199,7 @@ module ProcState = struct
        @[get_element_ptr_offset: %a@]@;\
        ]@]"
       Textual.QualifiedProcName.pp proc_state.qualified_name Textual.Location.pp proc_state.loc
-      pp_vars proc_state.locals pp_formals proc_state.formals pp_ids proc_state.ids_move pp_ids
+      pp_vars proc_state.locals pp_formals proc_state.formals pp_ids_data proc_state.ids_move pp_ids
       proc_state.ids_types
       (Pp.option (Pp.pair ~fst:Textual.Ident.pp ~snd:Int.pp))
       proc_state.id_offset
@@ -180,8 +212,8 @@ module ProcState = struct
     proc_state.locals <- VarMap.add varname typ proc_state.locals
 
 
-  let update_ids_move ~proc_state id typ =
-    proc_state.ids_move <- IdentMap.add id typ proc_state.ids_move
+  let update_ids_move ~proc_state id typ ~no_deref_needed =
+    proc_state.ids_move <- IdentMap.add id {typ; no_deref_needed} proc_state.ids_move
 
 
   (* debug_name = var1,
@@ -204,7 +236,8 @@ use the substitution in the code later on. *)
           | _ ->
               formal_typ
         in
-        proc_state.formals <- VarMap.add formal (new_typ, Some local) proc_state.formals
+        proc_state.formals <- VarMap.add formal (new_typ, Some local) proc_state.formals ;
+        Textual.VarName.Hashtbl.replace proc_state.local_map local new_typ.Textual.Typ.typ
     | _ ->
         ()
 
@@ -250,6 +283,7 @@ use the substitution in the code later on. *)
     ; loc
     ; formals= VarMap.empty
     ; locals= VarMap.empty
+    ; local_map= Textual.VarName.Hashtbl.create 16
     ; ids_move= IdentMap.empty
     ; ids_types= IdentMap.empty
     ; id_offset= None
