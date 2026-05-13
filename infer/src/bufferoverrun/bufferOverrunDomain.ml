@@ -1729,7 +1729,11 @@ module PruningExp = struct
 
   let nonzero_symbols =
     let symbol_of_val v =
-      match Symb.SymbolSet.elements (CoreVal.get_symbols v) with [symbol] -> Some symbol | _ -> None
+      match Symb.SymbolSet.elements (CoreVal.get_symbols v) with
+      | [symbol] ->
+          Some symbol
+      | _ ->
+          None
     in
     function
     | Binop {bop= Ne; lhs; rhs} when Itv.is_zero (Val.get_itv rhs) ->
@@ -2128,7 +2132,9 @@ module Reachability = struct
             when (not (Symb.Symbol.is_non_int symbol))
                  && Boolean.is_true (Itv.le_sem Itv.zero (Val.get_itv pruned_val_cond.v)) ->
               let nonzero_nat = Itv.of_bounds ~lb:Bounds.Bound.one ~ub:Bounds.Bound.pinf in
-              let refinement = join_refinement (SymbolMap.find_opt symbol refinements) nonzero_nat in
+              let refinement =
+                join_refinement (SymbolMap.find_opt symbol refinements) nonzero_nat
+              in
               SymbolMap.add symbol refinement refinements
           | _ ->
               refinements
@@ -2144,11 +2150,9 @@ module Reachability = struct
               let refinement_bound = Itv.get_bound refinement bound_end in
               match (bound_end, fallback_bound, refinement_bound) with
               | Symb.BoundEnd.LowerBound, NonBottom fallback, NonBottom refinement ->
-                  NonBottom
-                    (if Bounds.Bound.le fallback refinement then refinement else fallback)
+                  NonBottom (if Bounds.Bound.le fallback refinement then refinement else fallback)
               | Symb.BoundEnd.UpperBound, NonBottom fallback, NonBottom refinement ->
-                  NonBottom
-                    (if Bounds.Bound.le fallback refinement then fallback else refinement)
+                  NonBottom (if Bounds.Bound.le fallback refinement then fallback else refinement)
               | _ ->
                   fallback_bound )
         in
