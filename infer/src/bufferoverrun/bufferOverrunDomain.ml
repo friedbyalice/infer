@@ -1662,6 +1662,8 @@ module CoreVal = struct
     if Itv.is_bottom itv then ArrayBlk.is_symbolic (Val.get_array_blk v) else Itv.is_symbolic itv
 
 
+  let get_symbols v = Itv.get_symbols (Val.get_itv v)
+
   let is_bot = Val.is_bot
 end
 
@@ -1716,6 +1718,26 @@ module PruningExp = struct
         false
     | Binop {lhs; rhs} ->
         CoreVal.is_symbolic lhs || CoreVal.is_symbolic rhs
+
+
+  let get_symbols = function
+    | Unknown ->
+        Symb.SymbolSet.empty
+    | Binop {lhs; rhs} ->
+        Symb.SymbolSet.union (CoreVal.get_symbols lhs) (CoreVal.get_symbols rhs)
+
+
+  let nonzero_symbols =
+    let symbol_of_val v =
+      match Symb.SymbolSet.elements (CoreVal.get_symbols v) with [symbol] -> Some symbol | _ -> None
+    in
+    function
+    | Binop {bop= Ne; lhs; rhs} when Itv.is_zero (Val.get_itv rhs) ->
+        symbol_of_val lhs
+    | Binop {bop= Ne; lhs; rhs} when Itv.is_zero (Val.get_itv lhs) ->
+        symbol_of_val rhs
+    | _ ->
+        None
 
 
   let is_empty =
@@ -2009,6 +2031,7 @@ end
 
 module Reachability = struct
   module M = PrettyPrintable.MakePPSet (PrunedVal)
+  module SymbolMap = Symb.SymbolMap
 
   type t = M.t
 
@@ -2042,6 +2065,96 @@ module Reachability = struct
       if PrunedVal.is_bot v then raise Unreachable else add v acc
     in
     match M.fold subst1 x M.empty with x -> `Reachable x | exception Unreachable -> `Unreachable
+
+
+  let join_refinement old_itv new_itv =
+    match old_itv with
+    | None ->
+        new_itv
+    | Some old_itv ->
+        if Itv.leq ~lhs:new_itv ~rhs:old_itv then new_itv
+        else if Itv.leq ~lhs:old_itv ~rhs:new_itv then old_itv
+        else Itv.join old_itv new_itv
+
+
+  let same_symbol_path = function
+    | [] | [_] ->
+        true
+    | symbol :: symbols ->
+        List.for_all symbols ~f:(Symb.Symbol.paths_equal symbol)
+
+
+  let find_refinement symbol refinements =
+    match SymbolMap.find_opt symbol refinements with
+    | Some _ as refinement ->
+        refinement
+    | None ->
+        SymbolMap.fold
+          (fun refined_symbol refinement acc ->
+            match acc with
+            | Some _ ->
+                acc
+            | None ->
+                if Symb.Symbol.paths_equal symbol refined_symbol then Some refinement else None )
+          refinements None
+
+
+  let subst_with_refinements x ~reach_eval_sym_trace ~cond_eval_sym_trace location =
+    let exception Unreachable in
+    let subst1 (pruned_val : PrunedVal.t) (reachability, refinements) =
+      let pruned_val_reach = PrunedVal.subst pruned_val reach_eval_sym_trace location in
+      if PrunedVal.is_bot pruned_val_reach then raise Unreachable
+      else
+        let pruned_val_cond = PrunedVal.subst pruned_val cond_eval_sym_trace location in
+        let refinements =
+          let itv = Val.get_itv pruned_val_cond.v in
+          let symbols =
+            Symb.SymbolSet.union (Itv.get_symbols itv)
+              (PruningExp.get_symbols pruned_val_cond.pruning_exp)
+          in
+          match Symb.SymbolSet.elements symbols with
+          | symbols when same_symbol_path symbols ->
+              (* Only refine direct symbolic values; compound symbolic expressions need a proper
+                 meet operation to avoid attributing the whole refinement to one component. *)
+              List.fold symbols ~init:refinements ~f:(fun refinements symbol ->
+                  let refinement = join_refinement (SymbolMap.find_opt symbol refinements) itv in
+                  SymbolMap.add symbol refinement refinements )
+          | _ ->
+              refinements
+        in
+        let refinements =
+          match PruningExp.nonzero_symbols pruned_val.pruning_exp with
+          | Some symbol
+            when (not (Symb.Symbol.is_non_int symbol))
+                 && Boolean.is_true (Itv.le_sem Itv.zero (Val.get_itv pruned_val_cond.v)) ->
+              let nonzero_nat = Itv.of_bounds ~lb:Bounds.Bound.one ~ub:Bounds.Bound.pinf in
+              let refinement = join_refinement (SymbolMap.find_opt symbol refinements) nonzero_nat in
+              SymbolMap.add symbol refinement refinements
+          | _ ->
+              refinements
+        in
+        (add pruned_val_reach reachability, refinements)
+    in
+    match M.fold subst1 x (M.empty, SymbolMap.empty) with
+    | reachability, refinements ->
+        let refine_eval_sym eval_sym symbol bound_end =
+          let fallback_bound = eval_sym symbol bound_end in
+          Option.value_map (find_refinement symbol refinements) ~default:fallback_bound
+            ~f:(fun refinement ->
+              let refinement_bound = Itv.get_bound refinement bound_end in
+              match (bound_end, fallback_bound, refinement_bound) with
+              | Symb.BoundEnd.LowerBound, NonBottom fallback, NonBottom refinement ->
+                  NonBottom
+                    (if Bounds.Bound.le fallback refinement then refinement else fallback)
+              | Symb.BoundEnd.UpperBound, NonBottom fallback, NonBottom refinement ->
+                  NonBottom
+                    (if Bounds.Bound.le fallback refinement then fallback else refinement)
+              | _ ->
+                  fallback_bound )
+        in
+        `Reachable (reachability, refine_eval_sym)
+    | exception Unreachable ->
+        `Unreachable
 end
 
 module MemReach = struct

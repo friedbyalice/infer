@@ -29,8 +29,12 @@ define check_no_duplicates
 endef
 
 define check_no_diff
+  TMP_DIR="$$(mktemp -d)"; \
+  trap 'rm -rf "$$TMP_DIR"' EXIT; \
+  perl -CSD -pe 's/×/x/g' $$(realpath $(1)) >"$$TMP_DIR/expected"; \
+  perl -CSD -pe 's/×/x/g' $$(realpath $(2)) >"$$TMP_DIR/actual"; \
   git --no-pager diff --color=auto --no-ext-diff --no-index --word-diff --unified=1 --minimal \
-	$$(realpath $(1)) $$(realpath $(2)) >&2 || \
+	"$$TMP_DIR/expected" "$$TMP_DIR/actual" >&2 || \
   (printf '\n' >&2; \
    printf '$(TERM_ERROR)Test output ($(2)) differs from expected test output $(1)$(TERM_RESET)\n' >&2; \
    printf '$(TERM_ERROR)Run the following command to replace the expected test output with the new output:$(TERM_RESET)\n' >&2; \
