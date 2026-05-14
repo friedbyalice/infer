@@ -1727,7 +1727,22 @@ module PruningExp = struct
         Symb.SymbolSet.union (CoreVal.get_symbols lhs) (CoreVal.get_symbols rhs)
 
 
-  let nonzero_symbols =
+  let symmetric_binop = function
+    | Binop.Lt ->
+        Some Binop.Gt
+    | Binop.Gt ->
+        Some Binop.Lt
+    | Binop.Le ->
+        Some Binop.Ge
+    | Binop.Ge ->
+        Some Binop.Le
+    | (Binop.Eq | Binop.Ne) as bop ->
+        Some bop
+    | _ ->
+        None
+
+
+  let refinement_candidates original substituted =
     let symbol_of_val v =
       match Symb.SymbolSet.elements (CoreVal.get_symbols v) with
       | [symbol] ->
@@ -1735,13 +1750,20 @@ module PruningExp = struct
       | _ ->
           None
     in
-    function
-    | Binop {bop= Ne; lhs; rhs} when Itv.is_zero (Val.get_itv rhs) ->
-        symbol_of_val lhs
-    | Binop {bop= Ne; lhs; rhs} when Itv.is_zero (Val.get_itv lhs) ->
-        symbol_of_val rhs
+    match (original, substituted) with
+    | Binop {bop; lhs= original_lhs; rhs= original_rhs}, Binop {lhs; rhs} ->
+        let lhs_refinement =
+          Option.map (symbol_of_val original_lhs) ~f:(fun symbol ->
+              (symbol, Val.prune_binop bop lhs rhs) )
+        in
+        let rhs_refinement =
+          Option.bind (symmetric_binop bop) ~f:(fun bop ->
+              Option.map (symbol_of_val original_rhs) ~f:(fun symbol ->
+                  (symbol, Val.prune_binop bop rhs lhs) ) )
+        in
+        List.filter_opt [lhs_refinement; rhs_refinement]
     | _ ->
-        None
+        []
 
 
   let is_empty =
@@ -2127,17 +2149,13 @@ module Reachability = struct
               refinements
         in
         let refinements =
-          match PruningExp.nonzero_symbols pruned_val.pruning_exp with
-          | Some symbol
-            when (not (Symb.Symbol.is_non_int symbol))
-                 && Boolean.is_true (Itv.le_sem Itv.zero (Val.get_itv pruned_val_cond.v)) ->
-              let nonzero_nat = Itv.of_bounds ~lb:Bounds.Bound.one ~ub:Bounds.Bound.pinf in
-              let refinement =
-                join_refinement (SymbolMap.find_opt symbol refinements) nonzero_nat
-              in
-              SymbolMap.add symbol refinement refinements
-          | _ ->
-              refinements
+          PruningExp.refinement_candidates pruned_val.pruning_exp pruned_val_cond.pruning_exp
+          |> List.fold ~init:refinements ~f:(fun refinements (symbol, refinement_v) ->
+                 let refinement = Val.get_itv refinement_v in
+                 let refinement =
+                   join_refinement (SymbolMap.find_opt symbol refinements) refinement
+                 in
+                 SymbolMap.add symbol refinement refinements )
         in
         (add pruned_val_reach reachability, refinements)
     in
