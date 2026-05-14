@@ -2161,18 +2161,39 @@ module Reachability = struct
     in
     match M.fold subst1 x (M.empty, SymbolMap.empty) with
     | reachability, refinements ->
+        let bound_end_equal lhs rhs =
+          match (lhs, rhs) with
+          | Symb.BoundEnd.LowerBound, Symb.BoundEnd.LowerBound
+          | Symb.BoundEnd.UpperBound, Symb.BoundEnd.UpperBound ->
+              true
+          | _ ->
+              false
+        in
+        let eval_sym_is_top eval_sym symbol current_bound_end fallback_bound =
+          let eval_bound queried_bound_end =
+            if bound_end_equal current_bound_end queried_bound_end then fallback_bound
+            else eval_sym symbol queried_bound_end
+          in
+          match (eval_bound Symb.BoundEnd.LowerBound, eval_bound Symb.BoundEnd.UpperBound) with
+          | NonBottom lb, NonBottom ub ->
+              Bounds.Bound.is_minf lb && Bounds.Bound.is_pinf ub
+          | _ ->
+              false
+        in
         let refine_eval_sym eval_sym symbol bound_end =
           let fallback_bound = eval_sym symbol bound_end in
-          Option.value_map (find_refinement symbol refinements) ~default:fallback_bound
-            ~f:(fun refinement ->
-              let refinement_bound = Itv.get_bound refinement bound_end in
-              match (bound_end, fallback_bound, refinement_bound) with
-              | Symb.BoundEnd.LowerBound, NonBottom fallback, NonBottom refinement ->
-                  NonBottom (if Bounds.Bound.le fallback refinement then refinement else fallback)
-              | Symb.BoundEnd.UpperBound, NonBottom fallback, NonBottom refinement ->
-                  NonBottom (if Bounds.Bound.le fallback refinement then fallback else refinement)
-              | _ ->
-                  fallback_bound )
+          if eval_sym_is_top eval_sym symbol bound_end fallback_bound then fallback_bound
+          else
+            Option.value_map (find_refinement symbol refinements) ~default:fallback_bound
+              ~f:(fun refinement ->
+                let refinement_bound = Itv.get_bound refinement bound_end in
+                match (bound_end, fallback_bound, refinement_bound) with
+                | Symb.BoundEnd.LowerBound, NonBottom fallback, NonBottom refinement ->
+                    NonBottom (if Bounds.Bound.le fallback refinement then refinement else fallback)
+                | Symb.BoundEnd.UpperBound, NonBottom fallback, NonBottom refinement ->
+                    NonBottom (if Bounds.Bound.le fallback refinement then fallback else refinement)
+                | _ ->
+                    fallback_bound )
         in
         `Reachable (reachability, refine_eval_sym)
     | exception Unreachable ->
