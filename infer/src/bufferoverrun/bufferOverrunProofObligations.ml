@@ -712,12 +712,14 @@ module ConditionWithTrace = struct
          the first place?"
         pp_summary cwt Procname.pp callee_pname Location.pp call_site ;
     match
-      Dom.Reachability.subst cwt.reachability
-        (eval_sym_trace ~mode:Sem.EvalPOReachability)
+      Dom.Reachability.subst_with_refinements cwt.reachability
+        ~reach_eval_sym_trace:(eval_sym_trace ~mode:Sem.EvalPOReachability)
+        ~cond_eval_sym_trace:(eval_sym_trace ~mode:Sem.EvalPOCond)
         call_site
     with
-    | `Reachable reachability -> (
+    | `Reachable (reachability, refine_eval_sym) -> (
         let {Dom.eval_sym; trace_of_sym} = eval_sym_trace ~mode:Sem.EvalPOCond in
+        let eval_sym = refine_eval_sym eval_sym in
         match Condition.subst eval_sym cwt.cond with
         | None ->
             None

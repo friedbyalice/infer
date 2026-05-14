@@ -437,6 +437,16 @@ module Reachability : sig
 
   val subst : t -> eval_sym_trace -> Location.t -> [`Reachable of t | `Unreachable]
   (** Substitute a reachability value *)
+
+  val subst_with_refinements :
+       t
+    -> reach_eval_sym_trace:eval_sym_trace
+    -> cond_eval_sym_trace:eval_sym_trace
+    -> Location.t
+    -> [`Reachable of t * (Bounds.Bound.eval_sym -> Bounds.Bound.eval_sym) | `Unreachable]
+  (** Substitute a reachability value and return an evaluator refined with the substituted pruning
+      information. The refined evaluator can be used to instantiate proof-obligation conditions
+      under the same path assumptions that made them reachable. *)
 end
 
 module LoopHeadLoc : sig

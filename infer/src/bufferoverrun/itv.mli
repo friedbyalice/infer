@@ -146,6 +146,8 @@ val of_int : int -> t
 
 val of_big_int : Z.t -> t
 
+val of_bounds : lb:Bound.t -> ub:Bound.t -> t
+
 val of_int_lit : IntLit.t -> t
 
 val get_const : t -> Z.t option
