@@ -3,7 +3,7 @@
 {
 	"name": "Debian",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu-24.04",
+	"image": "mcr.microsoft.com/vscode/devcontainers/base:debian",
 
 	"runArgs": ["--platform=linux/amd64"],
 	
@@ -26,5 +26,7 @@
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	"remoteUser": "root",
 
-	"updateContentCommand": "bash .devcontainer/debian_setup.sh"
+	"updateContentCommand": "bash .devcontainer/debian_setup.sh",
+
+	"use_podman": true
 }

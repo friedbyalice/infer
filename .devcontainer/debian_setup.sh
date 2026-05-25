@@ -20,7 +20,7 @@ apt install --yes \
   libgmp-dev \
   sqlite3 \
   make \
-  openjdk-11-jdk-headless \
+  openjdk-21-jdk-headless \
   patch \
   patchelf \
   pkg-config \
