@@ -222,6 +222,8 @@ install_opam_deps () {
     # to pin camlzip after the fact instead; this will only rebuild javalib and sawja and only
     # the first time that we pin camlzip)
     opam pin add --no-action camlzip "$INFER_ROOT"/dependencies/camlzip
+    opam pin add --no-action javalib "$INFER_ROOT"/dependencies/javalib
+    opam pin add --no-action sawja "$INFER_ROOT"/dependencies/sawja
     opam install --deps-only "$INFER_ROOT"/opam/infer.opam$locked
 }
 
