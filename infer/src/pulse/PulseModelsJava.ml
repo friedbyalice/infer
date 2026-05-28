@@ -851,7 +851,7 @@ let matchers : matcher list =
     |> with_non_disj
   ; +map_context_tenv PatternMatch.Java.implements_iterator
     &:: "next" <>$ capt_arg_payload
-    $!--> Iterator.next ~desc:"Iterator.next()"
+    $+...$--> Iterator.next ~desc:"Iterator.next()"
     |> with_non_disj
   ; +BuiltinDecl.(match_builtin __instanceof)
     <>$ capt_arg_payload $+ capt_exp $--> instance_of |> with_non_disj

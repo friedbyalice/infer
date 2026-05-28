@@ -2302,13 +2302,13 @@ module Call = struct
       ; +PatternMatch.Java.implements_io "File" &:: "listFiles" <>$ capt_exp $--> File.list_files
       ; +PatternMatch.Java.implements_io "InputStream"
         &:: "read" <>$ any_arg $+ any_arg $+ any_arg $+ capt_exp $--> InputStream.read
-      ; +PatternMatch.Java.implements_iterator &:: "hasNext" <>$ capt_exp $!--> Collection.hasNext
+      ; +PatternMatch.Java.implements_iterator &:: "hasNext" <>$ capt_exp $+...$--> Collection.hasNext
       ; +PatternMatch.Java.implements_nio "Buffer" &:: "wrap" <>$ capt_exp $--> create_copy_array
       ; +PatternMatch.Java.implements_nio "Buffer"
         &:: "allocate" <>$ capt_exp $--> Collection.allocate
       ; +PatternMatch.Java.implements_nio "Buffer"
-        &:: "hasRemaining" <>$ capt_exp $!--> Collection.hasNext
-      ; +PatternMatch.Java.implements_iterator &:: "next" <>$ capt_exp $!--> Collection.next
+        &:: "hasRemaining" <>$ capt_exp $+...$--> Collection.hasNext
+      ; +PatternMatch.Java.implements_iterator &:: "next" <>$ capt_exp $+...$--> Collection.next
       ; +PatternMatch.Java.implements_lang "CharSequence"
         &:: "<init>" <>$ capt_exp $+ capt_exp $--> JavaString.copy_constructor
       ; +PatternMatch.Java.implements_lang "CharSequence"
