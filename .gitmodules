@@ -1,0 +1,8 @@
+[submodule "dependencies/javalib"]
+	path = dependencies/javalib
+	url = git@github.com:friedbyalice/javalib.git
+	branch = constdynamic-fix
+[submodule "dependencies/sawja"]
+	path = dependencies/sawja
+	url = git@github.com:friedbyalice/sawja.git
+	branch = constdynamic-fix
