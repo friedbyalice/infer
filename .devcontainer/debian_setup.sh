@@ -39,9 +39,11 @@ opam init --reinit --bare --disable-sandboxing --yes --auto-setup
 
 git config --global --add safe.directory /workspaces/infer
 
-./build-infer.sh java --only-setup-opam
+./build-infer.sh --only-setup-opam
 
-./build-infer.sh java
+./facebook-clang-plugins/clang/src/prepare_clang_src.sh
+CC=clang CXX=clang++ ./facebook-clang-plugins/clang/setup.sh --ninja --sequential-link
+./build-infer.sh 
 
 make devsetup
 

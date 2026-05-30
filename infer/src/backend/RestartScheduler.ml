@@ -44,26 +44,31 @@ let get_current_worker_slot () =
   match WorkerPoolState.get_in_child () with Some slot when slot >= 0 -> Some slot | _ -> None
 
 
-(** Find the worker whose tail element is the oldest (and at least [steal_age_floor] old), returning
-    [Some (slot, birth)] or [None]. *)
-let find_best_victim deques =
+(** Iterate all remote deques, round-robin from [(child_slot + 1) mod n], attempting to steal
+    an item aged ≥ [steal_age_floor].  Destructive steal + age check happen in one pass — items
+    that are too young are returned to the front via [push_tail] so they stay in position. *)
+let try_steal_aged deques child_slot =
   let n = Array.length deques in
-  let now = Time_ns.now () in
-  let best = ref None in
-  for slot = 0 to n - 1 do
-    match Concurrent.Deque.peek_front deques.(slot) with
-    | Some work -> (
-        let birth = work.birth in
-        if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then
-          match !best with
+  if n <= 1 then None
+  else
+    let now = Time_ns.now () in
+    let start = (child_slot + 1) mod n in
+    let rec loop i =
+      if i >= n then None
+      else
+        let idx = (start + i) mod n in
+        if Int.equal idx child_slot then loop (i + 1)
+        else
+          match Concurrent.Deque.steal deques.(idx) with
+          | Some {target= t; birth} ->
+              if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then Some t
+              else (
+                Concurrent.Deque.push_tail {birth; target= t} deques.(idx) ;
+                loop (i + 1) )
           | None ->
-              best := Some (slot, birth)
-          | Some (_, prev_birth) ->
-              if Time_ns.( < ) birth prev_birth then best := Some (slot, birth) )
-    | None ->
-        ()
-  done ;
-  !best
+              loop (i + 1)
+    in
+    loop 0
 
 
 (* ── Task generator ────────────────────────────────────────────────────── *)
@@ -138,18 +143,10 @@ let of_queue ~jobs ready :
         | Some _ as res ->
             res
         | None -> (
-          (* 4. Steal from another worker (age-checked, oldest tail first) *)
+          (* 4. Steal from another worker (age-checked, round-robin) *)
           match !worker_deques with
-          | Some deques -> (
-            match find_best_victim deques with
-            | Some (victim_slot, _birth) -> (
-              match Concurrent.Deque.steal deques.(victim_slot) with
-              | Some {target= t} ->
-                  Some t
-              | None ->
-                  None )
-            | None ->
-                None )
+          | Some deques ->
+              try_steal_aged deques child_slot
           | None ->
               None ) ) )
   in
