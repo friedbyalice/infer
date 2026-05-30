@@ -18,10 +18,12 @@ class ScannerTest {
   void nextPattern_ok() {
     Scanner scanner = new Scanner("hello world");
     String s = scanner.next(Pattern.compile("[a-z]+"));
+    scanner.close();
   }
 
   void hasNextPattern_ok() {
     Scanner scanner = new Scanner("hello world");
     boolean b = scanner.hasNext(Pattern.compile("[a-z]+"));
+    scanner.close();
   }
 }
