@@ -28,12 +28,12 @@ type ('work, 'result, 'child_id) t =
             schedulable until some already scheduled work is finished. *)
   ; push_work: 'child_id -> 'work -> unit
         (** [push_work child_id x] is called when a worker discovers a new work item [x] during
-            analysis (e.g., a callee that needs to be analyzed). The scheduler should add [x] to
-            the appropriate queue so that it can be picked up by any worker. *)
+            analysis (e.g., a callee that needs to be analyzed). The scheduler should add [x] to the
+            appropriate queue so that it can be picked up by any worker. *)
   ; steal: 'child_id for_child_info -> 'work option
         (** [steal child_info] is called when [next] returns [None] for an idle worker but the
-            scheduler might have work queued on other workers. [steal] should try to take work
-            from another worker's queue (FIFO end). Returns [None] if nothing available. *) }
+            scheduler might have work queued on other workers. [steal] should try to take work from
+            another worker's queue (FIFO end). Returns [None] if nothing available. *) }
 
 val chain :
   ('work, 'result, 'child_id) t -> ('work, 'result, 'child_id) t -> ('work, 'result, 'child_id) t

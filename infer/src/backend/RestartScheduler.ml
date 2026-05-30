@@ -23,12 +23,12 @@ end)
 
 (* ── Work-stealing data structures ─────────────────────────────────────── *)
 
-(** A work item with its insertion timestamp, used to enforce the 30-second floor before
-    stealing. *)
+(** A work item with its insertion timestamp, used to enforce the 30-second floor before stealing.
+*)
 type timed_work = {target: TaskSchedulerTypes.target; birth: Time_ns.t}
 
-(** Per-worker LIFO deques.  The owner pushes / pops the head (LIFO, depth-first).  Stealing
-    takes the tail (FIFO, oldest). *)
+(** Per-worker LIFO deques. The owner pushes / pops the head (LIFO, depth-first). Stealing takes the
+    tail (FIFO, oldest). *)
 let worker_deques : timed_work Concurrent.Deque.t array option ref = ref None
 
 (** Minimum age in seconds before a work item is eligible for stealing. *)
@@ -37,30 +37,24 @@ let steal_age_floor = Time_ns.Span.of_int_sec 30
 (* ── Helpers ───────────────────────────────────────────────────────────── *)
 
 let child_slot_of_id (worker_id : WorkerPoolState.worker_id) =
-  match worker_id with
-  | Pid _ ->
-      None
-  | Domain slot ->
-      Some slot
+  match worker_id with Pid _ -> None | Domain slot -> Some slot
+
 
 let get_current_worker_slot () =
-  match WorkerPoolState.get_in_child () with
-  | Some slot when slot >= 0 ->
-      Some slot
-  | _ ->
-      None
+  match WorkerPoolState.get_in_child () with Some slot when slot >= 0 -> Some slot | _ -> None
 
-(** Find the worker whose tail element is the oldest (and at least [steal_age_floor] old),
-    returning [Some (slot, birth)] or [None]. *)
+
+(** Find the worker whose tail element is the oldest (and at least [steal_age_floor] old), returning
+    [Some (slot, birth)] or [None]. *)
 let find_best_victim deques =
   let n = Array.length deques in
   let now = Time_ns.now () in
   let best = ref None in
   for slot = 0 to n - 1 do
     match Concurrent.Deque.peek_front deques.(slot) with
-    | Some work ->
+    | Some work -> (
         let birth = work.birth in
-        if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then (
+        if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then
           match !best with
           | None ->
               best := Some (slot, birth)
@@ -70,6 +64,7 @@ let find_best_victim deques =
         ()
   done ;
   !best
+
 
 (* ── Task generator ────────────────────────────────────────────────────── *)
 
@@ -103,9 +98,9 @@ let of_queue ~jobs ready :
   in
   let dequeue_from_blocked worker_id =
     match Queue.peek blocked with
-    | Some w when not !waiting_for_blocked_target ->
+    | Some w when not !waiting_for_blocked_target -> (
         let {target= bt; dependency_filenames} = w in
-        ( match ProcLocker.lock_all worker_id dependency_filenames with
+        match ProcLocker.lock_all worker_id dependency_filenames with
         | `LocksAcquired locks ->
             Queue.dequeue_exn blocked |> ignore ;
             FinalizerMap.add finalizers bt locks ;
@@ -147,12 +142,12 @@ let of_queue ~jobs ready :
           match !worker_deques with
           | Some deques -> (
             match find_best_victim deques with
-            | Some (victim_slot, _birth) ->
-                ( match Concurrent.Deque.steal deques.(victim_slot) with
-                | Some {target= t} ->
-                    Some t
-                | None ->
-                    None )
+            | Some (victim_slot, _birth) -> (
+              match Concurrent.Deque.steal deques.(victim_slot) with
+              | Some {target= t} ->
+                  Some t
+              | None ->
+                  None )
             | None ->
                 None )
           | None ->
@@ -170,8 +165,7 @@ let of_queue ~jobs ready :
   in
   let steal _for_child_info = None in
   (* Allocate per-worker deques for work-stealing *)
-  if jobs > 0 then
-    worker_deques := Some (Array.init jobs ~f:(fun _ -> Concurrent.Deque.create ())) ;
+  if jobs > 0 then worker_deques := Some (Array.init jobs ~f:(fun _ -> Concurrent.Deque.create ())) ;
   {remaining_tasks; is_empty; finished; next; push_work; steal}
 
 
@@ -240,9 +234,7 @@ let with_lock ~get_actives ~f pname =
         Stack.push (DLS.get locked_procs)
           {start= ExecutionDuration.counter (); callees_useful= ExecutionDuration.zero} ;
         let res =
-          try f ()
-          with exn ->
-            IExn.reraise_after ~f:(fun () -> unlock ~after_exn:true pname) exn
+          try f () with exn -> IExn.reraise_after ~f:(fun () -> unlock ~after_exn:true pname) exn
         in
         unlock ~after_exn:false pname ;
         res

@@ -10,8 +10,8 @@ val setup : unit -> unit
 
 val push_unanalyzed_callees : Procdesc.t -> unit
 (** In work-stealing multicore mode, enumerates all static callees of [proc_desc] and pushes the
-    sisters (all but the first unanalyzed callee) onto the current worker's LIFO deque.  The first
-    callee is handled inline by the normal on-demand analysis.  Items pushed this way are eligible
+    sisters (all but the first unanalyzed callee) onto the current worker's LIFO deque. The first
+    callee is handled inline by the normal on-demand analysis. Items pushed this way are eligible
     for stealing after 30 seconds. *)
 
 val make :

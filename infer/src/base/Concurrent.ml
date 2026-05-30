@@ -174,8 +174,7 @@ module Deque = struct
 
   let create () = {mutex= IMutex.create (); front= []; back= []}
 
-  let push v t =
-    IMutex.critical_section t.mutex ~f:(fun () -> t.back <- v :: t.back)
+  let push v t = IMutex.critical_section t.mutex ~f:(fun () -> t.back <- v :: t.back)
 
   let rec pop t =
     IMutex.critical_section t.mutex ~f:(fun () ->
@@ -192,6 +191,7 @@ module Deque = struct
               t.front <- [] ;
               pop t ) )
 
+
   let rec steal t =
     IMutex.critical_section t.mutex ~f:(fun () ->
         match t.front with
@@ -207,16 +207,16 @@ module Deque = struct
               t.back <- [] ;
               steal t ) )
 
+
   let is_empty t =
-    IMutex.critical_section t.mutex ~f:(fun () ->
-        List.is_empty t.front && List.is_empty t.back )
+    IMutex.critical_section t.mutex ~f:(fun () -> List.is_empty t.front && List.is_empty t.back)
+
 
   let length t =
-    IMutex.critical_section t.mutex ~f:(fun () ->
-        List.length t.front + List.length t.back )
+    IMutex.critical_section t.mutex ~f:(fun () -> List.length t.front + List.length t.back)
 
-  let push_tail v t =
-    IMutex.critical_section t.mutex ~f:(fun () -> t.front <- v :: t.front)
+
+  let push_tail v t = IMutex.critical_section t.mutex ~f:(fun () -> t.front <- v :: t.front)
 
   let peek_front t =
     IMutex.critical_section t.mutex ~f:(fun () ->
@@ -224,9 +224,5 @@ module Deque = struct
         | x :: _ ->
             Some x
         | [] -> (
-          match List.rev t.back with
-          | x :: _ ->
-              Some x
-          | [] ->
-              None ) )
+          match List.rev t.back with x :: _ -> Some x | [] -> None ) )
 end
