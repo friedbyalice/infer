@@ -44,13 +44,18 @@ let get_current_worker_slot () =
   match WorkerPoolState.get_in_child () with Some slot when slot >= 0 -> Some slot | _ -> None
 
 
+(** Mutex serializing steal attempts so the peek-front + steal compound operation is atomic
+    across competing thieves.  Stealing is rare (only when a worker has zero work), so the
+    serialization cost is negligible. *)
+let steal_guard = IMutex.create ()
+
 (** Iterate all remote deques, round-robin from [(child_slot + 1) mod n], attempting to steal
-    an item aged ≥ [steal_age_floor].  Destructive steal + age check happen in one pass — items
-    that are too young are returned to the front via [push_tail] so they stay in position. *)
+    an item aged ≥ [steal_age_floor].  The entire scan is serialised by [steal_guard] so that
+    no other thief can snatch an item between the peek and the steal. *)
 let try_steal_aged deques child_slot =
   let n = Array.length deques in
   if n <= 1 then None
-  else
+  else IMutex.critical_section steal_guard ~f:(fun () ->
     let now = Time_ns.now () in
     let start = (child_slot + 1) mod n in
     let rec loop i =
@@ -59,16 +64,17 @@ let try_steal_aged deques child_slot =
         let idx = (start + i) mod n in
         if Int.equal idx child_slot then loop (i + 1)
         else
-          match Concurrent.Deque.steal deques.(idx) with
-          | Some {target= t; birth} ->
-              if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then Some t
-              else (
-                Concurrent.Deque.push_tail {birth; target= t} deques.(idx) ;
-                loop (i + 1) )
+          match Concurrent.Deque.peek_front deques.(idx) with
+          | Some {birth} ->
+              if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then (
+                match Concurrent.Deque.steal deques.(idx) with
+                | Some {target= t} -> Some t
+                | None -> loop (i + 1) )
+              else loop (i + 1)
           | None ->
               loop (i + 1)
     in
-    loop 0
+    loop 0 )
 
 
 (* ── Task generator ────────────────────────────────────────────────────── *)
