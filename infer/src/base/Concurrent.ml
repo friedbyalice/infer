@@ -168,3 +168,65 @@ end) : CacheS with type key = Key.t = struct
     in_mutex t ~f:(fun hq ->
         HQ.lookup_and_remove hq key |> f |> Option.iter ~f:(HQ.enqueue_front_exn hq key) )
 end
+
+module Deque = struct
+  type 'a t = {mutex: IMutex.t; mutable front: 'a list; mutable back: 'a list}
+
+  let create () = {mutex= IMutex.create (); front= []; back= []}
+
+  let push v t =
+    IMutex.critical_section t.mutex ~f:(fun () -> t.back <- v :: t.back)
+
+  let rec pop t =
+    IMutex.critical_section t.mutex ~f:(fun () ->
+        match t.back with
+        | x :: xs ->
+            t.back <- xs ;
+            Some x
+        | [] -> (
+          match t.front with
+          | [] ->
+              None
+          | _ ->
+              t.back <- List.rev t.front ;
+              t.front <- [] ;
+              pop t ) )
+
+  let rec steal t =
+    IMutex.critical_section t.mutex ~f:(fun () ->
+        match t.front with
+        | x :: xs ->
+            t.front <- xs ;
+            Some x
+        | [] -> (
+          match t.back with
+          | [] ->
+              None
+          | _ ->
+              t.front <- List.rev t.back ;
+              t.back <- [] ;
+              steal t ) )
+
+  let is_empty t =
+    IMutex.critical_section t.mutex ~f:(fun () ->
+        List.is_empty t.front && List.is_empty t.back )
+
+  let length t =
+    IMutex.critical_section t.mutex ~f:(fun () ->
+        List.length t.front + List.length t.back )
+
+  let push_tail v t =
+    IMutex.critical_section t.mutex ~f:(fun () -> t.front <- v :: t.front)
+
+  let peek_front t =
+    IMutex.critical_section t.mutex ~f:(fun () ->
+        match t.front with
+        | x :: _ ->
+            Some x
+        | [] -> (
+          match List.rev t.back with
+          | x :: _ ->
+              Some x
+          | [] ->
+              None ) )
+end

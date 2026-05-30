@@ -2116,6 +2116,15 @@ and multicore =
     "[EXPERIMENTAL] uses multi-threading for analysis, currently partially or not implemented."
 
 
+and work_stealing =
+  CLOpt.mk_bool ~long:"work-stealing" ~default:false
+    ~in_help:InferCommand.[(Analyze, manual_scheduler)]
+    "[EXPERIMENTAL] enables work-stealing queues in the restart scheduler. Each worker maintains a \
+     local LIFO deque; callees discovered during on-demand analysis are enqueued and callers are \
+     pushed back, allowing idle workers to steal pending work from other workers' deques. This \
+     improves load balance during the tail of execution."
+
+
 and never_returning_null =
   let long = "never-returning-null" in
   ( long
@@ -4409,6 +4418,8 @@ and merge_summaries = RevList.to_list !merge_summaries
 and modeled_expensive = match modeled_expensive with k, r -> (k, !r)
 
 and multicore = !multicore
+
+and work_stealing = !work_stealing
 
 and never_returning_null = match never_returning_null with k, r -> (k, !r)
 

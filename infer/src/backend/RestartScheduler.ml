@@ -21,7 +21,59 @@ module FinalizerMap = Stdlib.Hashtbl.Make (struct
   type t = TaskSchedulerTypes.target [@@deriving equal, hash]
 end)
 
-let of_queue ready :
+(* ── Work-stealing data structures ─────────────────────────────────────── *)
+
+(** A work item with its insertion timestamp, used to enforce the 30-second floor before
+    stealing. *)
+type timed_work = {target: TaskSchedulerTypes.target; birth: Time_ns.t}
+
+(** Per-worker LIFO deques.  The owner pushes / pops the head (LIFO, depth-first).  Stealing
+    takes the tail (FIFO, oldest). *)
+let worker_deques : timed_work Concurrent.Deque.t array option ref = ref None
+
+(** Minimum age in seconds before a work item is eligible for stealing. *)
+let steal_age_floor = Time_ns.Span.of_int_sec 30
+
+(* ── Helpers ───────────────────────────────────────────────────────────── *)
+
+let child_slot_of_id (worker_id : WorkerPoolState.worker_id) =
+  match worker_id with
+  | Pid _ ->
+      None
+  | Domain slot ->
+      Some slot
+
+let get_current_worker_slot () =
+  match WorkerPoolState.get_in_child () with
+  | Some slot when slot >= 0 ->
+      Some slot
+  | _ ->
+      None
+
+(** Find the worker whose tail element is the oldest (and at least [steal_age_floor] old),
+    returning [Some (slot, birth)] or [None]. *)
+let find_best_victim deques =
+  let n = Array.length deques in
+  let now = Time_ns.now () in
+  let best = ref None in
+  for slot = 0 to n - 1 do
+    match Concurrent.Deque.peek_front deques.(slot) with
+    | Some work ->
+        let birth = work.birth in
+        if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then (
+          match !best with
+          | None ->
+              best := Some (slot, birth)
+          | Some (_, prev_birth) ->
+              if Time_ns.( < ) birth prev_birth then best := Some (slot, birth) )
+    | None ->
+        ()
+  done ;
+  !best
+
+(* ── Task generator ────────────────────────────────────────────────────── *)
+
+let of_queue ~jobs ready :
     ( TaskSchedulerTypes.target
     , TaskSchedulerTypes.analysis_result
     , WorkerPoolState.worker_id )
@@ -29,10 +81,7 @@ let of_queue ready :
   let remaining = ref (Queue.length ready) in
   let remaining_tasks () = !remaining in
   let is_empty () = Int.equal !remaining 0 in
-  (* jobs that had to restart get placed in the [blocked] queue while waiting to be retried *)
   let blocked = Queue.create () in
-  (* a ref to avoid checking if the same first job in the [blocked] queue is blocked multiple times
-     for different idle workers in the same process pool update cycle *)
   let waiting_for_blocked_target = ref false in
   let finalizers = FinalizerMap.create 1 in
   let restart_count = ref 0 in
@@ -48,42 +97,82 @@ let of_queue ready :
     | Some (RaceOn {dependency_filenames}) ->
         incr restart_count ;
         Queue.enqueue blocked {target; dependency_filenames}
+    | Some (Reschedule _) ->
+        Queue.enqueue ready target ;
+        incr remaining
   in
   let dequeue_from_blocked worker_id =
     match Queue.peek blocked with
-    | Some w when not !waiting_for_blocked_target -> (
-      (* see if we can acquire the locks needed by this job *)
-      match ProcLocker.lock_all worker_id w.dependency_filenames with
-      | `LocksAcquired locks ->
-          (* success! remove the job from [blocked] since we only [peek]ed before *)
-          Queue.dequeue_exn blocked |> ignore ;
-          (* the scheduler will need to unlock the locks we acquired on behalf of the child once it
-             is done with this work packet *)
-          FinalizerMap.add finalizers w.target locks ;
-          Some w.target
-      | `FailedToLockAll ->
-          (* failure; leave the job at the head of the queue and set the flag to avoid checking
-             again for a while. This is better (perf wise) than trying to run jobs further down the
-             queue, possibly because if we are here there is already too much contention so
-             decreasing contention by not scheduling any more tasks for this round is beneficial. *)
-          waiting_for_blocked_target := true ;
-          None )
+    | Some w when not !waiting_for_blocked_target ->
+        let {target= bt; dependency_filenames} = w in
+        ( match ProcLocker.lock_all worker_id dependency_filenames with
+        | `LocksAcquired locks ->
+            Queue.dequeue_exn blocked |> ignore ;
+            FinalizerMap.add finalizers bt locks ;
+            Some bt
+        | `FailedToLockAll ->
+            waiting_for_blocked_target := true ;
+            None )
     | _ ->
         None
   in
-  let next {TaskGenerator.child_id; is_first_update} =
-    if is_first_update then
-      (* new update cycle, worth checking if the first job in the queue is still blocked again *)
-      waiting_for_blocked_target := false ;
-    match dequeue_from_blocked child_id with
-    | Some _ as some_result ->
-        some_result
-    | None ->
-        (* if there are no blocked jobs available to be run, continue with the original queue or
-           wait for the next update if it's empty *)
-        Queue.dequeue ready
+  let next {TaskGenerator.child_id; child_slot; is_first_update} =
+    if is_first_update then waiting_for_blocked_target := false ;
+    (* 1. Own deque (LIFO) *)
+    ( match !worker_deques with
+    | Some deques when child_slot >= 0 && child_slot < Array.length deques -> (
+      match Concurrent.Deque.pop deques.(child_slot) with
+      | Some {target= t} ->
+          Some t
+      | None ->
+          None )
+    | _ ->
+        None )
+    |> fun own ->
+    match own with
+    | Some _ ->
+        own
+    | None -> (
+      (* 2. Central ready queue *)
+      match Queue.dequeue ready with
+      | Some _ as res ->
+          res
+      | None -> (
+        (* 3. Blocked queue *)
+        match dequeue_from_blocked child_id with
+        | Some _ as res ->
+            res
+        | None -> (
+          (* 4. Steal from another worker (age-checked, oldest tail first) *)
+          match !worker_deques with
+          | Some deques -> (
+            match find_best_victim deques with
+            | Some (victim_slot, _birth) ->
+                ( match Concurrent.Deque.steal deques.(victim_slot) with
+                | Some {target= t} ->
+                    Some t
+                | None ->
+                    None )
+            | None ->
+                None )
+          | None ->
+              None ) ) )
   in
-  {remaining_tasks; is_empty; finished; next}
+  let push_work child_id work_item =
+    let slot = child_slot_of_id child_id in
+    let timed = {birth= Time_ns.now (); target= work_item} in
+    ( match (!worker_deques, slot) with
+    | Some deques, Some s when s >= 0 && s < Array.length deques ->
+        Concurrent.Deque.push timed deques.(s)
+    | _ ->
+        Queue.enqueue ready work_item ) ;
+    incr remaining
+  in
+  let steal _for_child_info = None in
+  (* Allocate per-worker deques for work-stealing *)
+  if jobs > 0 then
+    worker_deques := Some (Array.init jobs ~f:(fun _ -> Concurrent.Deque.create ())) ;
+  {remaining_tasks; is_empty; finished; next; push_work; steal}
 
 
 let make sources =
@@ -114,7 +203,7 @@ let make sources =
   in
   permute_and_enqueue pname_targets ;
   permute_and_enqueue file_targets ;
-  of_queue queue
+  of_queue ~jobs:Config.jobs queue
 
 
 let setup () = match Config.scheduler with Restart -> ProcLocker.setup () | _ -> ()
@@ -151,7 +240,9 @@ let with_lock ~get_actives ~f pname =
         Stack.push (DLS.get locked_procs)
           {start= ExecutionDuration.counter (); callees_useful= ExecutionDuration.zero} ;
         let res =
-          try f () with exn -> IExn.reraise_after ~f:(fun () -> unlock ~after_exn:true pname) exn
+          try f ()
+          with exn ->
+            IExn.reraise_after ~f:(fun () -> unlock ~after_exn:true pname) exn
         in
         unlock ~after_exn:false pname ;
         res
@@ -167,4 +258,36 @@ let with_lock ~get_actives ~f pname =
       f ()
 
 
-let finish result task = match result with None | Some Ok -> None | Some (RaceOn _) -> Some task
+let finish result task =
+  match result with
+  | None | Some Ok ->
+      None
+  | Some (RaceOn _) ->
+      Some task
+  | Some (Reschedule _) ->
+      Some task
+
+
+(* ── Callee pre-enumeration ────────────────────────────────────────────── *)
+
+let push_unanalyzed_callees proc_desc =
+  if Config.work_stealing && Config.multicore then
+    let callees = Procdesc.get_static_callees proc_desc in
+    let unanalyzed =
+      List.filter_map callees ~f:(fun callee ->
+          if Summary.OnDisk.get ~lazy_payloads:true AnalysisRequest.all callee |> Option.is_none
+          then Some callee
+          else None )
+    in
+    match (!worker_deques, get_current_worker_slot ()) with
+    | Some deques, Some slot -> (
+      match unanalyzed with
+      | _first :: sisters ->
+          let now = Time_ns.now () in
+          List.iter sisters ~f:(fun callee ->
+              let target = Procname {proc_name= callee; specialization= None} in
+              Concurrent.Deque.push {birth= now; target} deques.(slot) )
+      | [] ->
+          () )
+    | _ ->
+        ()

@@ -154,6 +154,8 @@ let analyze replay_call_graph source_files_to_analyze =
           None
       | Some (RaceOn _) ->
           L.die InternalError "Race detected in -j 1"
+      | Some (Reschedule _) ->
+          None
     in
     ProcessPool.run_sequentially ~finish:fail_on_race ~f:analyze_target target_files ;
     ( [Stats.get ()]

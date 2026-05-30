@@ -81,3 +81,34 @@ end
 module MakeCache (Key : sig
   type t [@@deriving compare, equal, hash, show, sexp]
 end) : CacheS with type key = Key.t
+
+(** A thread-safe work-stealing deque (double-ended queue). Each worker has its own deque;
+    [push] and [pop] operate on the LIFO end (owned by the worker); [steal] operates on the
+    FIFO end (for other workers to steal the oldest work item). *)
+module Deque : sig
+  type 'a t
+
+  val create : unit -> 'a t
+
+  val push : 'a -> 'a t -> unit
+  (** Push to the LIFO end (owner's end) *)
+
+  val pop : 'a t -> 'a option
+  (** Pop from the LIFO end (owner's end). Returns [None] if empty. *)
+
+  val steal : 'a t -> 'a option
+  (** Steal from the FIFO end (other workers' end). Returns [None] if empty. *)
+
+  val is_empty : 'a t -> bool
+
+  val length : 'a t -> int
+
+  val push_tail : 'a -> 'a t -> unit
+  (** Push to the FIFO end (oldest position).  Used to return a failed stolen work item back to
+      the original owner's deque at the same position it was taken from. *)
+
+  val peek_front : 'a t -> 'a option
+  (** Peek at the FIFO end without removing.  Returns the oldest item in the deque, or [None] if
+      empty. *)
+
+end

@@ -10,4 +10,13 @@ open! IStd
     analyzed by another process *)
 exception ProcnameAlreadyLocked of {dependency_filenames: string list}
 
-let is_not_restart_exception = function ProcnameAlreadyLocked _ -> false | _ -> true
+(** for the work-stealing restart scheduler: raise when the scheduler decides to defer analysis of a
+    callee by pushing the caller back to the per-worker queue and the callee as a new work item, so
+    that other workers can steal the caller *)
+exception WorkStealingReschedule
+
+let is_not_restart_exception = function
+  | ProcnameAlreadyLocked _ | WorkStealingReschedule ->
+      false
+  | _ ->
+      true

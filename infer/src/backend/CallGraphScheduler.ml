@@ -90,4 +90,6 @@ let bottom_up call_graph =
     | File _ ->
         L.die InternalError "Only Procnames are scheduled but File target was received"
   in
-  {TaskGenerator.remaining_tasks; is_empty; finished; next}
+  let push_work _child_id _work_item = () in
+  let steal _for_child_info = None in
+  {TaskGenerator.remaining_tasks; is_empty; finished; next; push_work; steal}

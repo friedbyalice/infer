@@ -17,3 +17,7 @@ type analysis_result =
       (** Analysis stopped when trying to access the summary of a callee and that callee is being
           analyzed by another worker. [dependency_filenames] are in the path to the callee's lock
           file. *)
+  | Reschedule of {callee: target}
+      (** Work-stealing mode: analysis was deferred because a dependency (the [callee]) was pushed as
+          a new work item and the caller was pushed back to the ready queue for other workers to
+          steal. *)

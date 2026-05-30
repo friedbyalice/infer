@@ -277,6 +277,7 @@ let run_proc_analysis tenv analysis_req specialization_context ?caller_pname cal
     new_summary
   in
   let initial_callee_summary = preprocess () in
+  RestartScheduler.push_unanalyzed_callees callee_pdesc ;
   try
     if
       Option.exists Config.ondemand_callchain_limit ~f:(fun limit ->

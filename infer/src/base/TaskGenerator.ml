@@ -13,7 +13,9 @@ type ('a, 'b, 'c) t =
   { remaining_tasks: unit -> int
   ; is_empty: unit -> bool
   ; finished: result:'b option -> 'a -> unit
-  ; next: 'c for_child_info -> 'a option }
+  ; next: 'c for_child_info -> 'a option
+  ; push_work: 'c -> 'a -> unit
+  ; steal: 'c for_child_info -> 'a option }
 
 let chain (gen1 : ('a, 'b, 'c) t) (gen2 : ('a, 'b, 'c) t) : ('a, 'b, 'c) t =
   let remaining_tasks () = gen1.remaining_tasks () + gen2.remaining_tasks () in
@@ -29,7 +31,14 @@ let chain (gen1 : ('a, 'b, 'c) t) (gen2 : ('a, 'b, 'c) t) : ('a, 'b, 'c) t =
   let next for_child_info =
     if gen1_is_empty () then gen2.next for_child_info else gen1.next for_child_info
   in
-  {remaining_tasks; is_empty; finished; next}
+  let push_work child_id work_item =
+    if gen1_is_empty () then gen2.push_work child_id work_item
+    else gen1.push_work child_id work_item
+  in
+  let steal for_child_info =
+    if gen1_is_empty () then gen2.steal for_child_info else gen1.steal for_child_info
+  in
+  {remaining_tasks; is_empty; finished; next; push_work; steal}
 
 
 let of_list ~finish (lst : 'a list) : ('a, _, _) t =
@@ -52,7 +61,9 @@ let of_list ~finish (lst : 'a list) : ('a, _, _) t =
         content := xs ;
         Some x
   in
-  {remaining_tasks; is_empty; finished; next}
+  let push_work _child_id work_item = content := work_item :: !content in
+  let steal _for_child_info = None in
+  {remaining_tasks; is_empty; finished; next; push_work; steal}
 
 
 let finish_always_none result _ = match result with Some _ -> assert false | None -> None
