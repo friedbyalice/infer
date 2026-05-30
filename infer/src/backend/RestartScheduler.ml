@@ -31,6 +31,10 @@ type timed_work = {target: TaskSchedulerTypes.target; birth: Time_ns.t}
     tail (FIFO, oldest). *)
 let worker_deques : timed_work Concurrent.Deque.t array option ref = ref None
 
+(** Per-worker atomic oldest-birth timestamps (None = empty). The owner writes this under the deque
+    mutex when pushing the first item. Thieves read it lock-free. *)
+let oldest_birth : Time_ns.t option Atomic.t array option ref = ref None
+
 (** Minimum age in seconds before a work item is eligible for stealing. *)
 let steal_age_floor = Time_ns.Span.of_int_sec 30
 
@@ -45,8 +49,9 @@ let get_current_worker_slot () =
 
 
 (** Iterate all remote deques, round-robin from [(child_slot + 1) mod n], attempting to steal an
-    item aged ≥ [steal_age_floor]. Each deque is individually mutex-protected, no global lock. *)
-let try_steal_aged deques child_slot =
+    item aged ≥ [steal_age_floor]. Uses the per-worker [oldest_birth] atomic for lock-free
+    eligibility checks — only acquires a deque mutex on the fast-path (item actually old enough). *)
+let try_steal_aged deques births child_slot =
   let n = Array.length deques in
   if n <= 1 then None
   else
@@ -58,21 +63,18 @@ let try_steal_aged deques child_slot =
         let idx = (start + i) mod n in
         if Int.equal idx child_slot then loop (i + 1)
         else
-          match Concurrent.Deque.peek_front deques.(idx) with
-          | Some {birth} ->
-              if Time_ns.Span.( >= ) (Time_ns.diff now birth) steal_age_floor then
-                match Concurrent.Deque.steal deques.(idx) with
-                | Some {target= t; birth= stolen_birth} ->
-                    if Time_ns.Span.( >= ) (Time_ns.diff now stolen_birth) steal_age_floor then
-                      Some t
-                    else (
-                      Concurrent.Deque.push_tail {birth= stolen_birth; target= t} deques.(idx) ;
-                      loop (i + 1) )
-                | None ->
-                    loop (i + 1)
-              else loop (i + 1)
+          let birth_opt = Atomic.get births.(idx) in
+          match birth_opt with
           | None ->
               loop (i + 1)
+          | Some birth -> (
+              if Time_ns.Span.( < ) (Time_ns.diff now birth) steal_age_floor then loop (i + 1)
+              else
+                match Concurrent.Deque.steal deques.(idx) with
+                | Some {target= t} ->
+                    Some t
+                | None ->
+                    loop (i + 1) )
     in
     loop 0
 
@@ -150,10 +152,10 @@ let of_queue ~jobs ready :
             res
         | None -> (
           (* 4. Steal from another worker (age-checked, round-robin) *)
-          match !worker_deques with
-          | Some deques ->
-              try_steal_aged deques child_slot
-          | None ->
+          match (!worker_deques, !oldest_birth) with
+          | Some deques, Some births ->
+              try_steal_aged deques births child_slot
+          | _ ->
               None ) ) )
   in
   let push_work child_id work_item =
@@ -167,8 +169,10 @@ let of_queue ~jobs ready :
     incr remaining
   in
   let steal _for_child_info = None in
-  (* Allocate per-worker deques for work-stealing *)
-  if jobs > 0 then worker_deques := Some (Array.init jobs ~f:(fun _ -> Concurrent.Deque.create ())) ;
+  (* Allocate per-worker deques and birth-tracking atomics for work-stealing *)
+  if jobs > 0 then (
+    worker_deques := Some (Array.init jobs ~f:(fun _ -> Concurrent.Deque.create ())) ;
+    oldest_birth := Some (Array.init jobs ~f:(fun _ -> Atomic.make None)) ) ;
   {remaining_tasks; is_empty; finished; next; push_work; steal}
 
 
@@ -274,14 +278,16 @@ let push_unanalyzed_callees proc_desc =
           then Some callee
           else None )
     in
-    match (!worker_deques, get_current_worker_slot ()) with
-    | Some deques, Some slot -> (
+    match (!worker_deques, !oldest_birth, get_current_worker_slot ()) with
+    | Some deques, Some births, Some slot -> (
       match unanalyzed with
       | _first :: sisters ->
           let now = Time_ns.now () in
+          let was_empty = Int.equal (Concurrent.Deque.length deques.(slot)) 0 in
           List.iter sisters ~f:(fun callee ->
               let target = Procname {proc_name= callee; specialization= None} in
-              Concurrent.Deque.push {birth= now; target} deques.(slot) )
+              Concurrent.Deque.push {birth= now; target} deques.(slot) ) ;
+          if was_empty then Atomic.set births.(slot) (Some now)
       | [] ->
           () )
     | _ ->
